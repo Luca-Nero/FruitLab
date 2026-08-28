@@ -50,6 +50,17 @@ namespace FruitLab
             return ler.transform.parent != null ? ler.transform.parent : ler.transform;
         }
 
+        /// The creature this limb belongs to, or null for a detached one.
+        public static bam CreatureOf(LimbEffectorReceiver ler)
+        {
+            try
+            {
+                var refs = ler.m_limbReferences;
+                return refs != null ? Native.Creature(refs) : null;
+            }
+            catch { return null; }
+        }
+
         public static VoxelMesh MeshOf(LimbEffectorReceiver ler)
         {
             try { return Native.Mesh(ler); } catch { return null; }

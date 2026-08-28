@@ -66,5 +66,48 @@ namespace FruitLab
         public static void AddSignal(bjd batch, int x, int y, int z, float value,
                                      InfluenceProcessType mode) =>
             batch.jbq(Signal(Index(x, y, z), value, mode));
+
+        // ── LVA parameters ────────────────────────────────────────────────────
+        //
+        // A creature, a limb and an organ are all LVAEntity (bcx), each carrying a
+        // set of internal parameters — blood, cognition, muscle force, pain. In v0.1
+        // a parameter still *derives from* LimitedValue (bjq), so the value lives on
+        // the parameter itself; v0.12+ refactored that to composition
+        // (LVAParameter.Inner). Port note: reach for `.Inner` there.
+
+        /// LimbReferencesPublic.Limb — the limb as an LVA entity of its own.
+        public static bcx LimbEntity(zk refs) => refs.xjw;
+
+        /// LVAEntity.m_internalParameters — the concrete module, not the public API.
+        ///
+        /// The public API (LVAEntity.EntityInternalParametersPublic, `xlh`) only
+        /// offers generic lookups on an interface, and generic-instance virtual
+        /// dispatch through an IL2CPP interface does not resolve here: every call
+        /// came back empty against a creature that demonstrably had parameters.
+        /// The module underneath holds them in a plain dictionary instead.
+        public static bcx.bcr ParametersModule(bcx entity) => entity.sqq;
+
+        /// InternalParametersModule.m_parameters — Dictionary&lt;Type, LVAInternalParameter&gt;.
+        /// Walkable: a concrete Dictionary hands out a struct enumerator with real
+        /// MoveNext/Current, unlike the interface enumerators that cannot be walked.
+        public static Il2CppSystem.Collections.Generic.Dictionary<Il2CppSystem.Type, bdb>
+            ParameterMap(bcx.bcr module) => module.spv;
+
+        /// LimitedValue.m_value — the live value, read as a field so it costs nothing.
+        public static float Value(bjq p) => p.tcs;
+
+        /// LimitedValue.initialValue — the value the LimitedValue was *constructed*
+        /// with, NOT the creature's spawn state. Measured in-game it is 0 for most
+        /// parameters, with LVA raising them to max during initialisation. Diagnostics
+        /// only; restoring to it writes zero into everything and kills the body.
+        public static float Initial(bjq p) => p.tcr;
+
+        /// LimitedValue.minValue / MaxValue — diagnostics only.
+        public static float Min(bjq p) => p.tcq;
+        public static float Max(bjq p) => p.tcu;
+
+        /// LimitedValue.SetValue — fires the change notification the dependency
+        /// solver listens on, which is why the solve can push the value straight back.
+        public static void SetValue(bjq p, float value) => p.jdl(value);
     }
 }

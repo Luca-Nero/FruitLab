@@ -127,12 +127,9 @@ namespace FruitLab
 
         public static void OnUpdate()
         {
-            // Clicks and keys aimed at FruitLib's menu are not gameplay input.
-            if (!FruitMenu.BlocksGameplayInput)
-            {
-                if (_equipped && Input.GetMouseButtonDown(0)) Throw();
-                if (Input.GetKeyDown(Config.RecallKey))        RecallAll();
-            }
+            // Clicks aimed at FruitLib's menu are not gameplay input.
+            if (!FruitMenu.BlocksGameplayInput && _equipped && Input.GetMouseButtonDown(0))
+                Throw();
 
             if (_live.Count == 0) return;
             float dt = Time.deltaTime;

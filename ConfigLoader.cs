@@ -76,6 +76,11 @@ namespace FruitLab
             ["HealSignal"]       = "heal strength written into each voxel; the default is well past what any wound can undo",
             ["HealWaveSpeed"]    = "voxel-units the wave front expands per tick within one limb — low is a slow crawl, high is a sharp pop",
             ["HealWorldSpeed"]   = "metres/sec the wave front travels between limbs, which sets the stagger",
+
+            ["LazarusDuration"] = "seconds a Lazarus dose keeps a body alive before it runs out",
+            ["LazarusInterval"] = "seconds between vitals top-ups while a dose is running — lower reacts faster, higher costs less",
+
+            ["LogVitals"] = "log each creature's LVA vitals on impact and on expiry; turn on if a body will not stay alive and you need to see which value the game is dragging back down",
         };
 
         private static bool IsRenderable(Type t) =>

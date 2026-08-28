@@ -16,5 +16,12 @@ namespace FruitLab
         [MenuCategory("Healing Syringe")] public static float HealSignal       = 1000000f;
         [MenuCategory("Healing Syringe")] public static float HealWaveSpeed    = 0.25f;
         [MenuCategory("Healing Syringe")] public static float HealWorldSpeed   = 3f;
+
+        // ── Lazarus Syringe ───────────────────────────────────────────────────────
+        [MenuCategory("Lazarus Syringe")] public static float LazarusDuration = 30f;
+        [MenuCategory("Lazarus Syringe")] public static float LazarusInterval = 0.1f;
+
+        // ── Debug ─────────────────────────────────────────────────────────────────
+        [MenuCategory("Debug")] public static bool LogVitals = false;
     }
 }

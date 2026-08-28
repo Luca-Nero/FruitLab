@@ -16,17 +16,49 @@ namespace FruitLab
     /// </summary>
     internal static class Items
     {
-        public static void Register()    => HealingSyringe.Register();
-        public static void Update()      => HealingSyringe.OnUpdate();
-        public static void FixedUpdate() => HealingSyringe.OnFixedUpdate();
-        public static void SceneReload() => HealingSyringe.OnSceneReload();
+        public static void Register()
+        {
+            HealingSyringe.Register();
+            LazarusSyringe.Register();
+        }
+
+        public static void Update()
+        {
+            // Recall is mod-wide, so it lives here rather than inside an item.
+            if (!FruitLib.FruitMenu.BlocksGameplayInput && Input.GetKeyDown(Config.RecallKey))
+                RecallAll();
+
+            HealingSyringe.OnUpdate();
+            LazarusSyringe.OnUpdate();
+        }
+
+        public static void FixedUpdate()
+        {
+            HealingSyringe.OnFixedUpdate();
+            LazarusSyringe.OnFixedUpdate();
+        }
+
+        public static void SceneReload()
+        {
+            HealingSyringe.OnSceneReload();
+            LazarusSyringe.OnSceneReload();
+        }
+
+        /// Recall is mod-wide: one key clears every item's props.
+        public static void RecallAll()
+        {
+            HealingSyringe.RecallAll();
+            LazarusSyringe.RecallAll();
+        }
 
         /// Cheap gate for <see cref="PatchOrganDestroyLVA"/>: is any item doing
         /// something that needs organs kept alive?
-        public static bool AnyHoldingOrgans => HealingSyringe.AnyPassRunning;
+        public static bool AnyHoldingOrgans =>
+            HealingSyringe.AnyPassRunning || LazarusSyringe.AnyPassRunning;
 
         public static bool HoldsOrganTeardown(Transform organ) =>
-            HealingSyringe.HoldsOrganTeardown(organ);
+            HealingSyringe.HoldsOrganTeardown(organ) ||
+            LazarusSyringe.HoldsOrganTeardown(organ);
     }
 
     // ── Mod entry-point ───────────────────────────────────────────────────────────
