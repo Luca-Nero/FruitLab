@@ -11,7 +11,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-namespace DoNoHarm
+namespace FruitLab
 {
     internal enum OrganLayer
     {
@@ -82,9 +82,9 @@ namespace DoNoHarm
                 if (s.Obj != null) UnityEngine.Object.Destroy(s.Obj);
             }
             _syringes.Clear();
-            DoNoHarmMod.KeepAwake    = false;
-            DoNoHarmMod.HealingActive = false;
-            MelonLogger.Msg($"[DoNoHarm] Recalled. KeepAwake={DoNoHarmMod.KeepAwake}, HealingActive={DoNoHarmMod.HealingActive}");
+            FruitLab.Core.KeepAwake    = false;
+            FruitLab.Core.HealingActive = false;
+            MelonLogger.Msg($"[DoNoHarm] Recalled. KeepAwake={FruitLab.Core.KeepAwake}, HealingActive={FruitLab.Core.HealingActive}");
         }
 
         /// Updates stuck syringe transforms to follow their host rigidbody.
@@ -97,7 +97,7 @@ namespace DoNoHarm
                 if (s.Obj == null)
                 {
                     _syringes.RemoveAt(i);
-                    if (_syringes.Count == 0) DoNoHarmMod.KeepAwake = false;
+                    if (_syringes.Count == 0) FruitLab.Core.KeepAwake = false;
                     continue;
                 }
 
@@ -174,7 +174,7 @@ namespace DoNoHarm
 
             BuildQueue(s);
             FireWakeNudge(s);
-            DoNoHarmMod.KeepAwake = true;
+            FruitLab.Core.KeepAwake = true;
             MelonLogger.Msg($"[DoNoHarm] Stuck — {s.HealQueue.Count} limbs queued.");
 
             MelonCoroutines.Start(HealRoutine(s));
@@ -206,10 +206,10 @@ namespace DoNoHarm
                     var builder = MakeBuilder(cur, cur.WaveRadius);
                     if (builder == null) { cur.Done = true; continue; }
 
-                    DoNoHarmMod.HealingActive = true;
+                    FruitLab.Core.HealingActive = true;
 
                     try { cur.Ler.cyn(new bjb<bit>(builder)); }
-                    finally { DoNoHarmMod.HealingActive = false; builder.Dispose(); }
+                    finally { FruitLab.Core.HealingActive = false; builder.Dispose(); }
 
 
                     if (cur.WaveRadius >= cur.VoxelMax)

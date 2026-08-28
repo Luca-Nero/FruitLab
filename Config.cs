@@ -12,7 +12,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Timeline;
 
-namespace DoNoHarm
+namespace FruitLab
 {
     internal static class Config
     {
