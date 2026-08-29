@@ -93,6 +93,24 @@ namespace FruitLab
         public static Il2CppSystem.Collections.Generic.Dictionary<Il2CppSystem.Type, bdb>
             ParameterMap(bcx.bcr module) => module.spv;
 
+        /// LVAEntity.m_externalParameters — the module holding the graph's *inputs*.
+        ///
+        /// The distinction matters. Internal parameters are outputs: the solver
+        /// recomputes them from the externals, so writing one lasts only until the
+        /// next solve, which is why a body snaps back to its old numbers the moment
+        /// anything disturbs it. Blood is the clearest case — it is a tank, derived
+        /// from nothing, so a restored body that reverts to 44% blood can only be
+        /// reading that from an input we never touched.
+        public static bcx.bcs ExternalModule(bcx entity) => entity.sqr;
+
+        /// ExternalParametersModule.m_externalParameters — Dictionary&lt;Type, ExternalParameterInfo&gt;.
+        public static Il2CppSystem.Collections.Generic.Dictionary<Il2CppSystem.Type, bcx.bct>
+            ExternalMap(bcx.bcs module) => module.spw;
+
+        /// ExternalParameterInfo.externalParameter. LVAExternalParameter derives from
+        /// the same LimitedValue base as everything else, so it takes the same writes.
+        public static bda ExternalParam(bcx.bct info) => info.spz;
+
         /// LimitedValue.m_value — the live value, read as a field so it costs nothing.
         public static float Value(bjq p) => p.tcs;
 

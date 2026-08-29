@@ -333,6 +333,10 @@ namespace FruitLab
             Vitals.Freeze(d.Handles);
             d.Frozen = true;
 
+            // A dose stands a dead body up, and a dead body has had its feet switched to
+            // a frictionless material. Without this it stands there skating.
+            Puppeteer.RestoreFootFriction(root);
+
             MelonLogger.Msg(
                 $"[FruitLab] Lazarus holding {d.Handles.Count} vital(s) on {root.name} " +
                 $"for {Config.LazarusDuration:0.#}s.");

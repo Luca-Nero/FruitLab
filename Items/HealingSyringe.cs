@@ -27,6 +27,13 @@ namespace FruitLab
         private static readonly Color SpentColor = new Color(0.32f, 0.34f, 0.36f, 1f);
         private static readonly Vector3 PropScale = new Vector3(0.015f, 0.015f, 0.12f);
 
+        /// How long to keep re-applying the vitals restore after the wave finishes,
+        /// and how often within that window.
+        private const float SettleWindow   = 0.9f;
+        private const float SettleInterval = 0.15f;
+        /// Writing stops here; the remainder of the window is left quiet on purpose.
+        private const float SettleWriteFor = 0.5f;
+
         /// Seconds a non-disposable syringe waits between checks for fresh damage.
         /// Not a config knob: every syringe is disposable today, so it would show up
         /// in the menu doing nothing. Promote it back when a refillable variant lands.
@@ -84,6 +91,13 @@ namespace FruitLab
             public bool  Idle;                     // pass done, watching for new damage
             public float IdleTimer;
             public int   DamageWatermark = -1;
+
+            // Settling: the wave is over but the body is still moving.
+            public bool  Restored;                 // at least one restore applied
+            public float SettleFor;
+            public float SettleAccum;
+            public int   RestoredTotal;
+            public bool  DumpedBefore;
             public bool  WarnedEmpty;              // "no healable limbs" logs once
         }
 
@@ -356,10 +370,13 @@ namespace FruitLab
         {
             s.Targets.Clear();
             s.RagdollRbs.Clear();
-            s.Elapsed   = 0f;
-            s.TickAccum = 0f;
-            s.Idle      = false;
-            s.IdleTimer = 0f;
+            s.Elapsed     = 0f;
+            s.TickAccum   = 0f;
+            s.Idle        = false;
+            s.IdleTimer   = 0f;
+            s.Restored    = false;
+            s.SettleFor   = 0f;
+            s.SettleAccum = 0f;
 
             if (s.Obj == null || s.HostLer == null) return;
 
@@ -450,11 +467,35 @@ namespace FruitLab
             if (s.TickAccum > interval) s.TickAccum = interval;
 
             foreach (var t in s.Targets) if (!t.Done) return;
-            FinishPass(s);
+
+            // The wave is done; the body is not. Rebuilding voxels keeps the organs'
+            // effector collectors — and every parameter derived from them — moving for
+            // a few frames afterwards, so a single restore lands on a graph still in
+            // motion and the limb values come to rest at whatever arbitrary figure they
+            // had reached. Re-applying across a short window is what pressing a second
+            // dose into the body was doing by hand.
+            s.SettleFor   += dt;
+            s.SettleAccum += dt;
+
+            // Writes stop before the window closes. While we are still writing, our value
+            // and the solver's alternate frame to frame, so whichever landed last when the
+            // dose expired was the one that stuck — the same body finishing on 75 or 100
+            // by luck. Going quiet for the tail hands the last word to the game, which
+            // makes the outcome repeatable and makes the settled dump mean something.
+            if (s.SettleFor < SettleWriteFor && (!s.Restored || s.SettleAccum >= SettleInterval))
+            {
+                s.SettleAccum   = 0f;
+                s.Restored      = true;
+                s.RestoredTotal += RestoreVitals(s);
+            }
+
+            if (s.SettleFor >= SettleWindow) FinishPass(s);
         }
 
         private static void FinishPass(Syringe s)
         {
+            ReportRestore(s);
+
             if (s.Disposable)
             {
                 MelonLogger.Msg("[FruitLab] Dose spent.");
@@ -465,6 +506,89 @@ namespace FruitLab
             s.Idle            = true;
             s.IdleTimer       = 0f;
             s.DamageWatermark = DisabledVoxelTotal(s);
+        }
+
+        /// Puts back what the body lost, now that the wave has made it whole again.
+        ///
+        /// Rebuilding voxels does not touch the LVA graph at all — a fully repaired
+        /// body still holds whatever blood it had left and whatever consciousness that
+        /// implied, which is why healing a corpse used to produce an intact corpse.
+        /// Externals go first because they are the solver's inputs: with those right,
+        /// the solve that follows recomputes the rest correctly instead of dragging it
+        /// back down. The internals are then set as well so the effect is immediate
+        /// rather than waiting for whatever next disturbs the body.
+        private static int RestoreVitals(Syringe s)
+        {
+            if (s.HostLer == null || s.CreatureRoot == null) return 0;
+
+            var inputs  = new List<Vitals.Handle>();
+            var outputs = new List<Vitals.Handle>();
+            Gather(s, inputs, outputs);
+            if (inputs.Count == 0 && outputs.Count == 0) return 0;
+
+            if (Config.LogVitals && !s.DumpedBefore)
+            {
+                s.DumpedBefore = true;
+                Vitals.Dump("before restore — inputs", inputs);
+                Vitals.Dump("before restore — outputs", outputs);
+            }
+
+            // Death also throws a switch outside the LVA graph: the feet are swapped to a
+            // frictionless material so the corpse slides, and nothing ever swaps them
+            // back. Without this a revived body walks on ice.
+            Puppeteer.RestoreFootFriction(s.CreatureRoot);
+
+            // Inputs first: with the solver's own figures right, the solve that follows
+            // recomputes the outputs correctly instead of dragging them back down.
+            //
+            // Posture is skipped on both sides. Muscle, balance and the limb values are
+            // not things a body loses — a pristine ragdoll lifted off the ground reads
+            // the same low figures, because they describe how it is carrying itself. What
+            // healing puts back is blood, consciousness and organs; how the body is
+            // standing a moment later is the puppeteer's business.
+            return Vitals.RestoreAll(inputs,  skipPosture: true)
+                 + Vitals.RestoreAll(outputs, skipPosture: true);
+        }
+
+        private static void Gather(Syringe s, List<Vitals.Handle> inputs,
+                                              List<Vitals.Handle> outputs)
+        {
+            var creature = Limbs.CreatureOf(s.HostLer);
+            if (creature != null)
+            {
+                Vitals.CollectExternal(creature, "creature", inputs);
+                Vitals.CollectCreature(creature, outputs);
+            }
+
+            foreach (var ler in s.CreatureRoot.GetComponentsInChildren<LimbEffectorReceiver>(true))
+            {
+                if (ler == null) continue;
+                Vitals.CollectLimbExternal(ler, inputs);
+                Vitals.CollectLimb(ler, outputs);
+            }
+
+            // Organs are their own LVA entities and were being left behind: a body whose
+            // voxels had been fully rebuilt still read 1% on its bone parameters, because
+            // nothing had ever written them. Restoring the shell is not restoring the body.
+            Vitals.CollectOrgans(s.CreatureRoot, outputs, inputs);
+        }
+
+        /// Final readout once the body has stopped moving, so the log shows where it
+        /// actually came to rest rather than where the first write put it.
+        private static void ReportRestore(Syringe s)
+        {
+            if (s.RestoredTotal == 0 || s.CreatureRoot == null) return;
+
+            MelonLogger.Msg(
+                $"[FruitLab] Restored {s.RestoredTotal} vital(s) on {s.CreatureRoot.name}.");
+
+            if (!Config.LogVitals) return;
+
+            var inputs  = new List<Vitals.Handle>();
+            var outputs = new List<Vitals.Handle>();
+            Gather(s, inputs, outputs);
+            Vitals.Dump("settled — inputs", inputs);
+            Vitals.Dump("settled — outputs", outputs);
         }
 
         private static void StepWave(Syringe s)

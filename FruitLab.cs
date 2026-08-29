@@ -20,6 +20,7 @@ namespace FruitLab
         {
             HealingSyringe.Register();
             LazarusSyringe.Register();
+            VitalsMonitor.Register();
         }
 
         public static void Update()
@@ -30,6 +31,7 @@ namespace FruitLab
 
             HealingSyringe.OnUpdate();
             LazarusSyringe.OnUpdate();
+            VitalsMonitor.OnUpdate();
         }
 
         public static void FixedUpdate()
@@ -42,6 +44,8 @@ namespace FruitLab
         {
             HealingSyringe.OnSceneReload();
             LazarusSyringe.OnSceneReload();
+            VitalsMonitor.OnSceneReload();
+            FruitLabHud.Reset();
         }
 
         /// Recall is mod-wide: one key clears every item's props.
@@ -50,6 +54,10 @@ namespace FruitLab
             HealingSyringe.RecallAll();
             LazarusSyringe.RecallAll();
         }
+
+        /// Items that draw. Kept separate: OnGUI runs several times a frame, so
+        /// nothing that is not drawing should be on this path.
+        public static void DrawGUI() => VitalsMonitor.OnGUI();
 
         /// Cheap gate for <see cref="PatchOrganDestroyLVA"/>: is any item doing
         /// something that needs organs kept alive?
@@ -93,6 +101,11 @@ namespace FruitLab
         public override void OnFixedUpdate()
         {
             if (_active) Items.FixedUpdate();
+        }
+
+        public override void OnGUI()
+        {
+            if (_active) Items.DrawGUI();
         }
 
         public override void OnSceneWasInitialized(int buildIndex, string sceneName)

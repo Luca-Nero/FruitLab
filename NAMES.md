@@ -221,7 +221,29 @@ while the live value sits at max — LVA raises them during initialisation. Rest
 it writes zero into everything and kills the body instantly. Use `tcu` (MaxValue): on a
 healthy creature in v0.1 every parameter sits at or just under its max.
 
-Measured values, healthy vs. shot dead (creature `bbk` is the odd one, 100 in both):
+### Creature parameters — all four identified 2026-08-29
+
+Confirmed by watching a single chest wound play out on the Vitals Monitor, not by
+name matching:
+
+| key | parameter | behaviour that identifies it |
+|-----|-----------|------------------------------|
+| `bbl` | `UsedBloodAmount` | `BloodTank.snn` points at it; keeps draining after death |
+| `bbj` | `CognitionLevel` | the kill registers the instant it reaches 0 — this alone is death |
+| `bbh` | `Balance` | tracks the worst limb value almost exactly; at 0 the body cannot stand |
+| `bbk` | `GeneralMuscleForce` | snaps 100 → 5 → 100 in time with each attempt to get up |
+
+`CreatureTotalPain` is the one v0.14 has that v0.1 does not.
+
+**Death is not bleeding out.** In the observed run consciousness hit 0 with blood still
+at 55%, and blood carried on draining afterwards. Blood loss drives consciousness down,
+but the kill is registered off `CognitionLevel` alone.
+
+**Balance is clamped by the limbs.** Creature `bbh` and the worst limb value converge on
+each other continuously — the limbs appear to cap it.
+
+Older measurement, healthy vs. shot dead (`bbk` is the odd one, 100 in both, because
+muscle force is intrinsic capacity rather than something death zeroes):
 ```
              healthy      dead
 bbh / bbj    ~100         0        creature-level, these are what flatline
@@ -245,3 +267,151 @@ in v0.14 declaration order; the other six `void(float)` methods on it are decoys
 **Unused on purpose** — the order is inferred rather than proven, and mistaking Drain
 for Fill would bleed a body dry. Writing `initialValue` through `bjq.jdl` needs no
 such guess.
+
+## What decides a creature is dead
+
+`sf` = **`LVA.Organs.Variants.CrunchedDeathCounter`** (an `OrganSystem`, so it is not a
+component and cannot be reached with GetComponent — go through the organ's systems module).
+1:1 with v0.14:
+
+```
+gsx -> TryRegisterDeath()          gsw -> FUCKINGCRUTCHREGISTER() : IEnumerator  [sic]
+gst(gd) -> Construct(...)          gd  -> IKillsService
+rqt -> m_cognitionLevel : IReadOnlyLVAParameter    ← the life/death signal
+rqu -> m_registered : bool                         ← one-shot latch
+rqv -> m_killsService
+```
+
+**Death is not a flag — it is `CognitionLevel` bottoming out.** `CrunchedDeathCounter` watches
+that one parameter and calls `TryRegisterDeath` when it does, which reports to `IKillsService`
+(what the pause-screen `KillsCounter` view displays) and sets `m_registered` so one corpse cannot
+be counted twice. That latch is why a revived creature killed a second time does not increment
+the counter, and `gsx` is the frame in the NRE stack from
+[[frukt-hud-deactivation-breaks-lva]] — the counter is downstream of the vitals graph, which is
+why deactivating its UI broke death handling.
+
+Also confirms `bjs` = `IReadOnlyLVAParameter`, reached independently from `bcg.ieo()`.
+
+`tx` = `OrganEffectorPerceptionModule` (`guy(bool)` = `ApplyFeedbacks`, `guw()` =
+`GetReceivedEffectorsTypes`, `rsh`…`rsn` = its fields), and `ua<T>` = `EffectorCollector<T>`
+(`gvn(int)` = `UpdateOverallProgress`), `uc` = `IEffectorCollector`. That whole stack is the
+damage path: apply feedback → collector progress → `LimitedValue.SetValue` → solve → observers.
+FruitLab's freeze cuts it at SetValue.
+
+## Inputs vs outputs: why a write does not stick
+
+`LimitedValue.SetValue` writes the *output* of the dependency graph. The solver keeps
+its own inputs and re-emits them on the next solve, so any internal parameter you write
+reverts the moment something disturbs the creature. Measured 2026-08-29: a body whose
+vitals had been forced to 100% snapped back to **44% blood** when a leg was shot — blood
+is a tank derived from nothing, so a recomputed value could not have produced that
+number. It was read back from an input.
+
+The inputs are the entity's **external** parameters:
+```
+bcx.sqr  -> m_externalParameters : ExternalParametersModule (bcx.bcs)
+bcx.bcs.spw -> m_externalParameters : Dictionary<Type, ExternalParameterInfo>
+bcx.bct  -> LVAEntity.ExternalParameterInfo
+bcx.bct.spz -> externalParameter : LVAExternalParameter   (bda)
+bda : bdc : bjq — so an external parameter takes the same SetValue as everything else
+```
+`bda` = `LVAExternalParameter`. `bbi` (held by `BloodTank.sno`) is one of these, and is
+the blood figure the internal `bbl` is derived from.
+
+**Rule of thumb:** write an internal parameter for a temporary effect (Lazarus holds them
+and blocks everyone else's writes); write the external parameter for a permanent one.
+
+### External parameters observed on a human (v0.1)
+
+v0.14 has exactly five `LVAExternalParameter` subclasses, which names all five:
+
+| v0.1 | real name | notes |
+|------|-----------|-------|
+| `bbi` | (the blood figure) | 0..5146.21, the input behind internal `bbl` |
+| `ri` | `PuppeteerToCreatureGeneralMuscleForce` | written every frame by the puppeteer |
+| `rh` | `PuppeteerToCreatureBalance` | written every frame by the puppeteer |
+| `bbs` | `CognitionActivityToggle` | 0..1, sits at 1 |
+| `xq` | `Limbs.Systems.MuscleForceTension` | 0..100, per limb, the input behind limb `xr` |
+| `yp` | `Limbs.Systems.BalanceAgentSystemValue` | 0..1, sits at 1 |
+
+**`rh`, `ri` and `xq` are live puppeteer output, not damage state.** Restoring one is
+meaningless — the animation system rewrites it within the frame and everything derived
+from it follows. Writing them is what left a healed body with muscle, balance, both limb
+values and every `xq` sitting on the *same* arbitrary number (61.962 in one run): that
+figure was just the puppeteer's blend at the instant it took the values back.
+
+A permanent restore must skip them. Lazarus deliberately does not — overriding the
+puppeteer is precisely how it holds a ruined body upright.
+
+**Externals are sparse and added on demand.** `TryAddExternalParameter` means a limb only
+carries an `xq` if something has influenced it — on the body measured, `xq` existed on the
+pelvis and legs (the damaged half) and nowhere else, and the spine and head carried no
+externals at all. Never assume a given entity has a given external.
+
+`rh` and `ri` are written continuously by the puppeteer, so restoring them is a no-op that
+gets overwritten within the frame. Harmless, and correct — muscle tension should be driven.
+
+Limb `zr` has **no external at all**, so it is derived purely from organ/voxel state. That is
+why it is the last thing to come right after a heal: it follows the effector collectors, which
+keep moving for several frames after the voxels are rebuilt.
+
+## Death's one-way switches (outside the LVA graph)
+
+Not everything death does is a parameter. `FootFrictionControl` — a **MonoBehaviour**, and
+in v0.1 it keeps its real name under `Il2CppActiveRagdoll.Scripts` (v0.14 moved it to
+`LVA.Puppeteers.Variants.Humanoid`) — swaps both feet to a zero-friction physics material
+when consciousness reaches zero, so a corpse slides instead of catching on the ground.
+
+**There is no counterpart that swaps it back.** The game has no notion of getting up again,
+so a revived body walks on ice: the legs step, the feet skate, it goes nowhere. Call
+`SetDefaultFriction()` on revival; the walk cycle's alternating SetLeft/SetRight resumes
+from there.
+
+```
+SetDefaultFriction / SetLeftFriction / SetRightFriction   real names, all three
+m_zeroFriction / m_defaultFriction / m_isNeeded           real names
+ddt -> DisableOnZeroCognitionLevel()
+dds(bam, qx) -> Initialize(AbstractCreature, HumanoidCreatureLimbsProvider)
+php / phq -> m_leftFootPhysics / m_rightFootPhysics
+phr -> m_assignedCreature   phs -> m_cognitionLevel (bjs)
+pht / phu -> the foot listeners (bav = INativeLimbListener)
+phv / phw -> m_rightFootDestroyed / m_leftFootDestroyed
+```
+
+**Expect more of these.** Anywhere the game reacts to death it is likely one-directional,
+because nothing was ever meant to come back. When a revived creature behaves oddly in a way
+the vitals do not explain, look for a `…OnZeroCognitionLevel`-shaped method rather than a
+parameter.
+
+## Posture is not health
+
+The single most misleading thing in this system. Lift a **pristine, undamaged** ragdoll
+off the ground with the cursor and read it:
+
+```
+muscle (bbk)  5%     balance (bbh)  0%     limb zr  5%     limb xr  22%
+rh 0%         ri 5%         xq 22%
+blood 100%    consciousness 100%    organs 100%
+```
+
+Those are the figures a healthy body reports while dangling, and they are the same ones
+that appear on a corpse. **`rh ri xq bbk bbh xr zr` describe how a body is carrying
+itself** — ground contact, muscle tension, poise — not how hurt it is. A body in mid-air
+is carrying itself not at all.
+
+Consequences:
+
+- **Never restore them.** There is no correct value to write; it depends on what the body
+  is doing this instant and the puppeteer rewrites it continuously. Forcing them to max
+  made a healed body read 100% on values a healthy one only reaches when standing squarely
+  on both feet.
+- **Never colour them as health,** and never let them feed a life/death readout. Balance
+  at 0 is a body off its feet, not a body in trouble.
+- **`xr` at ~22% on a leg is normal**, not damage. So is `zr` at 5%.
+
+What genuinely tracks health: `bbj` consciousness, `bbl`/`bbi` blood, and the organ
+parameters `tl` `tm` `ud`. That is the whole list.
+
+**The diagnostic that settles this class of question: read a pristine body first.** Every
+figure above had been rationalised as injury for several sessions purely because a healthy
+baseline had never been taken.

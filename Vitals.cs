@@ -42,13 +42,26 @@ namespace FruitLab
     internal static class Vitals
     {
         /// One restorable parameter, already resolved to its LimitedValue base.
+        /// <see cref="Key"/> is the parameter's own type name, which is what
+        /// identifies it across creatures; <see cref="Label"/> also carries the owner.
         internal readonly struct Handle
         {
-            public readonly bjq  Param;
-            public readonly string Label;
+            public readonly bjq    Param;
+            public readonly string Key;     // parameter type name
+            public readonly string Owner;   // creature, or the limb it belongs to
 
-            public Handle(bjq param, string label) { Param = param; Label = label; }
-            public bool Valid => Param != null;
+            public Handle(bjq param, string key, string owner)
+            {
+                Param = param; Key = key; Owner = owner;
+            }
+
+            public string Label => Owner + "/" + Key;
+
+            public bool  Valid    => Param != null;
+            public float Value    { get { try { return Native.Value(Param); } catch { return 0f; } } }
+            public float Max      { get { try { return Native.Max(Param);   } catch { return 0f; } } }
+            public float Fraction { get { float m = Max; return m > 0.0001f ? Mathf.Clamp01(Value / m) : 0f; } }
+            public bool  Frozen   => IsFrozen(Param);
         }
 
         // ── Collection ────────────────────────────────────────────────────────
@@ -93,7 +106,7 @@ namespace FruitLab
                     string name;
                     try { name = kv.Key != null ? kv.Key.Name : "?"; } catch { name = "?"; }
 
-                    into.Add(new Handle(param, prefix + "/" + name));
+                    into.Add(new Handle(param, name, prefix));
                     found++;
                 }
             }
@@ -123,17 +136,100 @@ namespace FruitLab
         /// blood and dead limb parameters still will not move.
         public static int CollectLimb(LimbEffectorReceiver ler, List<Handle> into)
         {
-            bcx entity;
+            var entity = LimbEntityOf(ler, out string label);
+            return entity == null ? 0 : Collect(entity, label, into);
+        }
+
+        /// The entity's *external* parameters — what the solver reads rather than what
+        /// it writes. Restoring these is what makes a change outlive the next solve.
+        public static int CollectExternal(bcx entity, string prefix, List<Handle> into)
+        {
+            if (entity == null) return 0;
+
+            Il2CppSystem.Collections.Generic.Dictionary<Il2CppSystem.Type, bcx.bct> map;
             try
             {
-                var refs = ler.m_limbReferences;
-                if (refs == null) return 0;
-                entity = Native.LimbEntity(refs);
+                var module = Native.ExternalModule(entity);
+                if (module == null) return 0;
+                map = Native.ExternalMap(module);
+                if (map == null) return 0;
             }
             catch { return 0; }
 
-            string label = ler.transform.parent != null ? ler.transform.parent.name : ler.name;
-            return Collect(entity, label, into);
+            int found = 0;
+            try
+            {
+                var e = map.GetEnumerator();
+                while (e.MoveNext())
+                {
+                    var kv = e.Current;
+                    if (kv.Value == null) continue;
+
+                    bda param;
+                    try { param = Native.ExternalParam(kv.Value); } catch { continue; }
+                    if (param == null) continue;
+
+                    string name;
+                    try { name = kv.Key != null ? kv.Key.Name : "?"; } catch { name = "?"; }
+
+                    into.Add(new Handle(param, name, prefix));
+                    found++;
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning($"[FruitLab] external vitals walk failed on {prefix}: {ex.Message}");
+            }
+
+            return found;
+        }
+
+        public static int CollectLimbExternal(LimbEffectorReceiver ler, List<Handle> into)
+        {
+            var entity = LimbEntityOf(ler, out string label);
+            return entity == null ? 0 : CollectExternal(entity, label, into);
+        }
+
+        /// Every organ on a creature, walked the same way. Organs are the layer under
+        /// the limbs — integrity, efficiency, backbone conduction — and unlike limbs and
+        /// creatures they are MonoBehaviours, so they can be found by component.
+        ///
+        /// Worth having because limb `zr` has no external parameter of its own: whatever
+        /// drives it lives down here.
+        public static int CollectOrgans(Transform creatureRoot, List<Handle> into) =>
+            CollectOrgans(creatureRoot, into, null);
+
+        /// <paramref name="externals"/> is optional; pass one to gather the organs'
+        /// inputs in the same walk rather than enumerating every organ twice.
+        public static int CollectOrgans(Transform creatureRoot, List<Handle> into,
+                                        List<Handle> externals)
+        {
+            if (creatureRoot == null) return 0;
+
+            int found = 0;
+            foreach (var organ in creatureRoot.GetComponentsInChildren<rx>(true))
+            {
+                if (organ == null) continue;
+                string label;
+                try { label = organ.gameObject.name; } catch { label = "organ"; }
+
+                if (into != null)     found += Collect(organ, label, into);
+                if (externals != null) CollectExternal(organ, label, externals);
+            }
+            return found;
+        }
+
+        private static bcx LimbEntityOf(LimbEffectorReceiver ler, out string label)
+        {
+            label = "limb";
+            try
+            {
+                var refs = ler.m_limbReferences;
+                if (refs == null) return null;
+                label = ler.transform.parent != null ? ler.transform.parent.name : ler.name;
+                return Native.LimbEntity(refs);
+            }
+            catch { return null; }
         }
 
         // ── Restore ───────────────────────────────────────────────────────────
@@ -162,16 +258,46 @@ namespace FruitLab
             catch { return false; }
         }
 
+        /// Posture, not health.
+        ///
+        /// Established by lifting a *pristine* ragdoll off the ground and reading it:
+        /// muscle 5%, balance 0%, limb zr 5%, limb xr 22%, rh 0%, ri 5%, xq 22%. An
+        /// undamaged body dangling in the air reports exactly the figures we had been
+        /// treating as catastrophic injury, because they describe how it is carrying
+        /// itself — ground contact, muscle tension, poise — and a body in mid-air is
+        /// carrying itself not at all.
+        ///
+        /// Nothing here is ever "restored". There is no correct value to write: it
+        /// depends entirely on what the body is doing this instant, and the puppeteer
+        /// rewrites it continuously. Forcing them to max was writing nonsense, and it is
+        /// why a healed body used to read 100% on values a healthy one never reaches
+        /// unless it happens to be standing squarely on both feet.
+        ///
+        /// Lazarus deliberately still freezes them — overriding posture is exactly how it
+        /// holds a ruined body upright.
+        private static readonly string[] Posture =
+            { "rh", "ri", "xq", "bbk", "bbh", "xr", "zr" };
+
+        public static bool IsPosture(string key)
+        {
+            for (int i = 0; i < Posture.Length; i++) if (Posture[i] == key) return true;
+            return false;
+        }
+
         /// Restores a whole set, returning how many actually needed writing. With the
         /// set frozen this is a no-op; it stays as the fallback for a build where the
         /// freeze patch did not take, where it degrades to the old re-apply behaviour.
-        public static int RestoreAll(List<Handle> handles)
+        public static int RestoreAll(List<Handle> handles, bool skipPosture = false)
         {
             _selfWriting = true;
             try
             {
                 int written = 0;
-                foreach (var h in handles) if (Restore(h)) written++;
+                foreach (var h in handles)
+                {
+                    if (skipPosture && IsPosture(h.Key)) continue;
+                    if (Restore(h)) written++;
+                }
                 return written;
             }
             finally { _selfWriting = false; }
@@ -234,6 +360,15 @@ namespace FruitLab
         /// True when this write should be refused. Kept as cheap as possible: it sits
         /// on a method the game calls constantly, so the common case is one int
         /// compare against an empty ledger.
+        /// Whether this parameter is currently pinned by a Lazarus dose. The monitor
+        /// shows it, which makes "held" visible instead of something you infer.
+        internal static bool IsFrozen(bjq value)
+        {
+            if (_frozen.Count == 0 || value == null) return false;
+            try { return _frozen.ContainsKey(IL2CPP.Il2CppObjectBaseToPtr(value)); }
+            catch { return false; }
+        }
+
         internal static bool BlocksWrite(bjq value)
         {
             if (_frozen.Count == 0 || _selfWriting || value == null) return false;

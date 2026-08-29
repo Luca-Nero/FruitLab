@@ -80,6 +80,8 @@ namespace FruitLab
             ["LazarusDuration"] = "seconds a Lazarus dose keeps a body alive before it runs out",
             ["LazarusInterval"] = "seconds between vitals top-ups while a dose is running — lower reacts faster, higher costs less",
 
+            ["VitalsRange"] = "how far the Vitals Monitor reaches when you aim at a body, in metres",
+
             ["LogVitals"] = "log each creature's LVA vitals on impact and on expiry; turn on if a body will not stay alive and you need to see which value the game is dragging back down",
         };
 

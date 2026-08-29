@@ -21,6 +21,9 @@ namespace FruitLab
         [MenuCategory("Lazarus Syringe")] public static float LazarusDuration = 30f;
         [MenuCategory("Lazarus Syringe")] public static float LazarusInterval = 0.1f;
 
+        // ── Vitals Monitor ────────────────────────────────────────────────────────
+        [MenuCategory("Vitals Monitor")] public static float VitalsRange = 25f;
+
         // ── Debug ─────────────────────────────────────────────────────────────────
         [MenuCategory("Debug")] public static bool LogVitals = false;
     }
