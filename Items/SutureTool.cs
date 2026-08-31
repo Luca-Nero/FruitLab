@@ -496,8 +496,8 @@ namespace FruitLab
             {
                 var body = Limbs.CreatureOf(parent);
 
-                // Read before the hand-over. Taking ownership takes the puppeteer with
-                // it, so a head's driver is already gone by the time we would look.
+                // Read before the hand-over: taking ownership takes the driver with it,
+                // so a head's puppeteer is already gone by the time we would look.
                 var carriedDriver = Limbs.PuppeteerOf(_held);
 
                 int taken = Limbs.AdoptAll(_assembly, body);
@@ -505,27 +505,21 @@ namespace FruitLab
                 Diag.Log("wiring",
                     $"{taken} of {_assembly.Count} limb(s) handed over to {Diag.Body(body)}");
 
-                // Whichever half has a driver lends it to the rest. The body's own comes
-                // first, so sewing an arm onto someone alive joins the arm to them; only
-                // when the body has nobody at the controls — a headless one, and its
-                // head is where the puppeteer went — does the visitor drive.
-                Limbs.CollectBody(parent, _bodyLimbs);
-
-                var driver = Limbs.PuppeteerOfCreature(body)
-                          ?? Limbs.PuppeteerOf(parent)
-                          ?? carriedDriver;
-
-                if (driver != null)
+                // Nothing hands the puppeteer over: it cannot be done, see
+                // Native.InitializePuppeteer. But adoption runs from the carried half
+                // *into* the target's creature, so which half you carry decides which
+                // mind survives — and that makes the limitation something you can work
+                // around rather than something you are stuck with.
+                //
+                // Said out loud rather than only in diagnostics, because it is the one
+                // piece of knowledge that turns "this body is inert" into "hold it the
+                // other way round", and nothing about the tool would suggest it.
+                if (carriedDriver != null && Limbs.PuppeteerOfCreature(body) == null)
                 {
-                    int given = Limbs.SharePuppeteer(driver, _bodyLimbs)
-                              + Limbs.SharePuppeteer(driver, _assembly);
-
-                    if (given > 0)
-                        Diag.Log("wiring", $"{given} limb(s) given a puppeteer to drive them");
-                }
-                else
-                {
-                    Diag.Log("wiring", "neither half has a puppeteer — nothing will drive this");
+                    MelonLogger.Msg(
+                        $"[FruitLab] {name} carries the mind and {NameOf(parent)} has none, " +
+                        "so the result will not move. Carry the body and sew it onto the head " +
+                        "instead — the body joins the head's creature, and the whole thing wakes.");
                 }
 
                 foreach (var ler in _assembly) Diag.Wiring("after adoption", ler);

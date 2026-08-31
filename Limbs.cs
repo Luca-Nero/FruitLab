@@ -381,41 +381,6 @@ namespace FruitLab
             return taken;
         }
 
-        /// Gives a set of limbs something to drive them.
-        ///
-        /// Needed because the puppeteer travels with the head, not the body. Decapitate
-        /// a creature and the driver leaves with the skull: the torso keeps its blood
-        /// and its consciousness and has nobody at the controls, which is exactly how a
-        /// headless body reads in game. Handing ownership over then makes it worse — a
-        /// head that had a puppeteer loses it to a body that has none — so after any
-        /// hand-over, whichever half still has a driver has to lend it to the rest.
-        ///
-        /// Only limbs that lack one are touched, so this never overwrites a live body's
-        /// own puppeteer with a visitor's.
-        public static int SharePuppeteer(qb puppeteer, List<LimbEffectorReceiver> limbs)
-        {
-            if (puppeteer == null || limbs == null) return 0;
-
-            int given = 0;
-
-            foreach (var ler in limbs)
-            {
-                if (ler == null || PuppeteerOf(ler) != null) continue;
-
-                var setter = CoresSetterOf(ler);
-                if (setter == null) continue;
-
-                try { Native.AssignPuppeteer(setter, puppeteer); given++; }
-                catch (Exception e)
-                {
-                    MelonLogger.Warning(
-                        $"[FruitLab] {Diag.Name(ler)} would not take a puppeteer: {e.Message}");
-                }
-            }
-
-            return given;
-        }
-
         /// Every limb on whatever body this one belongs to.
         public static void CollectBody(LimbEffectorReceiver ler, List<LimbEffectorReceiver> into)
         {

@@ -100,6 +100,50 @@ dismemberment notes), and **nothing in the hierarchy API takes that away**:
 pointing at the old owner. In game that is a limb that hangs off the body,
 carries its own blood and vitals, and is animated by nothing.
 
+#### The puppeteer cannot be moved between bodies
+`qb` is `IAbstractPuppeteer` in v0.1 (five abstract members; the `Initialized` /
+`MarkInitialized` pair lives on the concrete class).
+```
+ggr -> References    ggs -> Initialize(AbstractCreature)
+ggt -> GetLimb(AbstractNodeTag)   ggu/ggv -> add/remove OnAnimationDone
+```
+`bam.hza` -> `AbstractCreature.AssignPuppeteer(AbstractPuppeteer)` (protected, but
+Il2CppInterop widens it; the only protected `void(qb)` inside bam's run
+`hya`…`hzc`, the other four being decoys), guarded by `bam.smb`
+(`HasAssignedPuppeteer`).
+
+**The handshake has two halves and only one can be replayed.** Assigning works.
+Re-targeting does not:
+```
+SystemException: Double initialization is a sign that you've taken a shit
+somewhere. Exception sender: HumanoidPuppeteer
+```
+Assigning without re-targeting is *worse* than doing nothing: the body is driven
+toward the pose and facing of the creature the rig was built for — in game, a
+torso locked into a cower that snaps back when you try to turn it. FruitLab
+therefore calls neither.
+
+**The puppeteer travels with the head.** Decapitate a creature and the driver
+leaves with the skull, which is why a headless body keeps its blood and its
+consciousness (`bbj` reads ~95% with no head at all) and still does nothing.
+Reattaching a head restores ownership, vitals and physics, but not the mind.
+
+**The way round it is to reverse the operation.** Ownership flows from the carried
+half *into* the target's creature, so carry the **body** and sew it onto the
+**head**: the body's limbs are adopted into the head's creature, which already has
+a correctly initialised puppeteer, and nothing needs re-targeting. Confirmed in
+game — the result goes through the proper stages of getting up, curling and
+spreading out. The pelvis enters via `AttachParentAsNative`, which is exactly what
+that method is for: making a node the new root of a hierarchy.
+
+So the rule is: **whichever half holds the mind must be the target, not the thing
+you carry.**
+
+Same reason headshots stop mattering on such a body: cognition is high *because*
+the brain is absent, not despite it — the input that would drag it down is not
+zero, it is missing, and the dependency graph is built at construction. Blood is
+wired in (`bbi` sits in the creature's inputs), which is why bleed-out still kills.
+
 #### `bcl` — `IParentCoresSetter` (this is where ownership lives)
 Reached as `zk.xkc` (`LimbReferencesPublic.ParentCoresSetter`). An interface, so no
 decoys, and v0.1's four members line up with v0.14's declaration order position

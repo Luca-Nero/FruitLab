@@ -222,11 +222,66 @@ namespace FruitLab
         /// IParentCoresSetter.RemoveCreature()
         public static void RemoveCreature(bcl setter) => setter.idw();
 
-        /// IParentCoresSetter.AssignPuppeteer(AbstractPuppeteer)
+        /// IParentCoresSetter.AssignPuppeteer(AbstractPuppeteer).
+        ///
+        /// **Mapped, and not a setter.** It fans out to a list of subscribers rather
+        /// than storing anything, and calling it limb-by-limb throws
+        /// NullReferenceException out of one of them (`yd.hlr`, reached through a
+        /// List.ForEach inside `bbv.idx`) while leaving the limb's AssignedPuppeteer
+        /// still null. Tried on a head sutured to a headless body: fifteen limbs
+        /// accepted the call, the pelvis threw, and the head reported no puppeteer
+        /// afterwards all the same.
+        ///
+        /// The puppeteer travels with the head — decapitate a creature and the driver
+        /// leaves with the skull, which is why a headless body keeps its blood and its
+        /// consciousness and still does nothing. Handing it back is a real problem and
+        /// this is not the route; the creature-level AbstractCreature.AssignPuppeteer,
+        /// or re-running AbstractPuppeteer.Initialize, is where to look next.
         public static void AssignPuppeteer(bcl setter, qb puppeteer) => setter.idx(puppeteer);
 
         /// AbstractCreature.AssignedPuppeteer
         public static qb CreaturePuppeteer(bam creature) => creature.smc;
+
+        /// AbstractCreature.HasAssignedPuppeteer — the guard on AssignPuppeteer below.
+        public static bool HasPuppeteer(bam creature) => creature.smb;
+
+        /// AbstractCreature.AssignPuppeteer(AbstractPuppeteer).
+        ///
+        /// The creature-level assignment, and the one the game itself uses: it stores
+        /// the puppeteer, tells the internal systems module, sets HasAssignedPuppeteer
+        /// and walks every limb. Not to be confused with IParentCoresSetter's
+        /// same-named method, which only notifies subscribers and stores nothing.
+        ///
+        /// **Throws DoubleInitialization if the creature already has one**, so check
+        /// HasPuppeteer first. Protected in the game; Il2CppInterop widens it, which is
+        /// the only reason this is reachable at all.
+        ///
+        /// `hza` is the sole protected void(AbstractPuppeteer) inside bam's real run
+        /// hya…hzc — the other four with that signature are decoys.
+        public static void AssignCreaturePuppeteer(bam creature, qb puppeteer) =>
+            creature.hza(puppeteer);
+
+        /// AbstractPuppeteer.Initialize(AbstractCreature).
+        ///
+        /// **Mapped as a dead end. A puppeteer cannot be moved between bodies.**
+        ///
+        /// AssignPuppeteer tells a creature who drives it; this is meant to tell the
+        /// driver which body it drives, and it refuses:
+        ///
+        ///     SystemException: Double initialization is a sign that you've taken a
+        ///     shit somewhere. Exception sender: HumanoidPuppeteer
+        ///
+        /// Assigning without re-targeting is worse than not assigning at all: the body
+        /// is then driven toward the pose and facing of the creature the rig was built
+        /// for, which in game is a torso locked into a cower that snaps back when you
+        /// try to turn it. Inert is the better of the two, so nothing calls either.
+        ///
+        /// The consequence is worth stating plainly: **a decapitated body cannot be
+        /// given its mind back.** The puppeteer leaves with the skull and the game
+        /// assembles a creature once. Reattaching a head restores ownership, vitals and
+        /// physics, and the body stays a body.
+        public static void InitializePuppeteer(qb puppeteer, bam creature) =>
+            puppeteer.ggs(creature);
 
         /// LimbNode.assignedLimb
         public static Il2CppLVA.Limbs.AbstractLimb NodeLimb(vd node) => node.rus;
