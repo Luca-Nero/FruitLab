@@ -90,6 +90,406 @@ namespace FruitLab
             catch { return false; }
         }
 
+        /// This limb's references block, or null if it has none.
+        public static zk RefsOf(LimbEffectorReceiver ler)
+        {
+            try { return ler.m_limbReferences; } catch { return null; }
+        }
+
+        /// Whether nothing is holding this limb up any more.
+        ///
+        /// Reads the node hierarchy, not the joints: a limb that has come off gets a
+        /// fresh creature of its own, so its joint and its transform parent both look
+        /// perfectly reasonable. Note that a creature's *root* limb also has no parent,
+        /// so this is "unheld", not "severed" — callers that care about the difference
+        /// check the creature as well.
+        public static bool IsUnheld(LimbEffectorReceiver ler)
+        {
+            var refs = RefsOf(ler);
+            if (refs == null) return false;
+
+            try
+            {
+                var node = Native.Node(refs);
+                return node != null && !Native.HasParentNode(node);
+            }
+            catch { return false; }
+        }
+
+        /// The hierarchy operations module for the creature this limb belongs to.
+        public static bbn HierarchyOpsOf(bam creature)
+        {
+            if (creature == null) return null;
+            try { return Native.HierarchyOps(creature); } catch { return null; }
+        }
+
+        /// Puts a limb back on a creature, through the same module the game's own
+        /// Detach Limb runs in reverse.
+        ///
+        /// Returns false when the limb is not native to that creature, which is the
+        /// game's own answer rather than a guess of ours, so it is safe to offer it
+        /// anything and let it refuse.
+        public static bool Reattach(bbn ops, LimbEffectorReceiver ler)
+        {
+            if (ops == null) return false;
+
+            var refs = RefsOf(ler);
+            if (refs == null) return false;
+
+            try
+            {
+                var limb = Native.Limb(refs);
+                if (limb == null) return false;
+                return Native.TryAddAsNative(ops, limb);
+            }
+            catch (Exception e)
+            {
+                MelonLogger.Warning($"[FruitLab] Reattach failed: {e.Message}");
+                return false;
+            }
+        }
+
+        /// This limb's physics block, or null.
+        public static Il2CppLVA.Limbs.LimbPhysics PhysicsOf(LimbEffectorReceiver ler)
+        {
+            var refs = RefsOf(ler);
+            if (refs == null) return null;
+            try { return Native.PhysicsOf(refs); } catch { return null; }
+        }
+
+        /// The joint holding this limb on, or null.
+        public static ConfigurableJoint JointOf(LimbEffectorReceiver ler)
+        {
+            var physics = PhysicsOf(ler);
+            if (physics == null) return null;
+            try { return Native.Joint(physics); } catch { return null; }
+        }
+
+        /// The rigidbody this limb moves with.
+        public static Rigidbody BodyOf(LimbEffectorReceiver ler)
+        {
+            var physics = PhysicsOf(ler);
+            if (physics != null)
+            {
+                try { var rb = Native.Body(physics); if (rb != null) return rb; } catch { }
+            }
+
+            try { return ler.GetComponentInParent<Rigidbody>(); } catch { return null; }
+        }
+
+        /// Where this limb attaches — its joint anchor if it has a joint, otherwise
+        /// the pivot it hangs from, otherwise the middle of it.
+        public static Vector3 AnchorOf(LimbEffectorReceiver ler)
+        {
+            var joint = JointOf(ler);
+            if (joint != null)
+            {
+                try { return joint.transform.TransformPoint(joint.anchor); } catch { }
+            }
+
+            var physics = PhysicsOf(ler);
+            if (physics != null)
+            {
+                try
+                {
+                    var pivot = Native.Pivot(physics);
+                    if (pivot != null) return pivot.position;
+                }
+                catch { }
+            }
+
+            return SamplePointOf(ler);
+        }
+
+        /// Makes one limb part of another body, through the game's own third-party
+        /// attach protocol.
+        ///
+        /// Runs on the *parent's* hierarchy, because that is the body gaining a limb.
+        /// The protocol is what notifies the creature's limb listeners, so this is the
+        /// difference between a limb that is merely held on and one the body knows
+        /// about — see Native.AttachThirdparty.
+        public static bool GraftNode(LimbEffectorReceiver child, LimbEffectorReceiver parent)
+        {
+            var childRefs  = RefsOf(child);
+            var parentRefs = RefsOf(parent);
+            if (childRefs == null || parentRefs == null) return false;
+
+            try
+            {
+                var childNode  = Native.Node(childRefs);
+                var parentNode = Native.Node(parentRefs);
+                if (childNode == null || parentNode == null) return false;
+
+                var creature  = Native.Creature(parentRefs);
+                var hierarchy = creature != null ? Native.NodeHierarchy(creature) : null;
+                if (hierarchy == null)
+                {
+                    MelonLogger.Warning("[FruitLab] That body has no node hierarchy to graft into.");
+                    return false;
+                }
+
+                Native.AttachThirdparty(hierarchy, childNode, parentNode);
+                return true;
+            }
+            catch (Exception e)
+            {
+                MelonLogger.Warning($"[FruitLab] Node graft failed: {e.Message}");
+                return false;
+            }
+        }
+
+        /// Puts a limb back in its own slot, if the body will still have it.
+        ///
+        /// Worth trying before anything else, and worth *not* skipping: a severed limb
+        /// keeps its native standing (the node still reports Native), and the
+        /// third-party graft takes that away — so grafting a body's own arm as a
+        /// foreign one quietly demotes it. Only a limb in its native slot carries a
+        /// node tag, and the puppeteer addresses limbs by tag, so this is also the only
+        /// route by which a reattached limb can end up animated.
+        ///
+        /// The hierarchy decides where it goes, not the caller, so a limb put back this
+        /// way lands in its real socket rather than where the click was.
+        ///
+        /// Asked of the **body's** hierarchy, never the limb's own. Severing gives a
+        /// limb a fresh creature of its own, built from the same prefab and therefore
+        /// carrying the same name — so a severed arm and the body it came off both read
+        /// as "HumanCreaturePrefab(Clone)" while being different objects entirely.
+        /// Reading the hierarchy off the child asks a one-limb creature whether that
+        /// limb can attach to itself, and the answer is a perfectly truthful no.
+        public static bool GraftNative(LimbEffectorReceiver child, LimbEffectorReceiver parent)
+        {
+            var refs       = RefsOf(child);
+            var parentRefs = RefsOf(parent);
+            if (refs == null || parentRefs == null) return false;
+
+            try
+            {
+                var node = Native.Node(refs);
+                if (node == null || !Native.IsNodeNative(node)) return false;
+
+                var creature  = Native.Creature(parentRefs);
+                var hierarchy = creature != null ? Native.NodeHierarchy(creature) : null;
+                if (hierarchy == null) return false;
+
+                var ops = HierarchyOpsOf(creature);
+
+                // Ask the module first. TryAddAsNative is the whole pipeline — slot,
+                // creature, listeners — where the hierarchy calls below only move the
+                // node. It has refused before, but it was being asked about a limb
+                // whose node was not yet anywhere near this body.
+                if (ops != null && Reattach(ops, child))
+                {
+                    Diag.Log("wiring", $"{Diag.Name(child)} was adopted outright");
+                    return true;
+                }
+
+                bool asChild  = Native.CanAttachAsChild(hierarchy, node);
+                bool asParent = Native.CanAttachAsParent(hierarchy, node);
+
+                Diag.Log("wiring",
+                    $"native slot test for {Diag.Name(child)}: " +
+                    $"as child {asChild}, as parent {asParent}");
+
+                if (asChild)       Native.AttachAsChild(hierarchy, node);
+                else if (asParent) Native.AttachAsParent(hierarchy, node);
+                else               return false;
+
+                // And again, now that the node is where it belongs. Putting a limb in
+                // the right slot is not the same as the body owning it: the node moves,
+                // the LVA membership does not, and a limb that is still its own
+                // creature keeps its own blood and its own muscles and hangs there.
+                // This is the call that would hand it over.
+                if (ops != null && Reattach(ops, child))
+                    Diag.Log("wiring", $"{Diag.Name(child)} adopted once the node was in place");
+                else
+                    Diag.Log("wiring",
+                        $"{Diag.Name(child)} is in the right slot but the body will not adopt " +
+                        "it — it keeps its own creature, and with it its own vitals");
+
+                return true;
+            }
+            catch (Exception e)
+            {
+                MelonLogger.Warning($"[FruitLab] Node graft failed: {e.Message}");
+                return false;
+            }
+        }
+
+        /// Hands a limb over to another body's LVA, by relaunching it under that
+        /// creature.
+        ///
+        /// **Experimental, and off by default.** A limb can sit in the right slot of the
+        /// right hierarchy and still belong to a creature of its own — severing gives it
+        /// one, and neither the node attach nor TryAddAsNative takes it away again. That
+        /// is why a reattached limb keeps its own blood and its own vitals and nothing
+        /// animates it. LaunchLVA is the only public method on a limb that names a
+        /// creature, so it is the only lever left; what it does to a limb whose LVA is
+        /// already running is genuinely unknown, and re-initialising one could plausibly
+        /// undo whatever healing was done to it.
+        public static bool Adopt(LimbEffectorReceiver child, bam creature)
+        {
+            var setter = CoresSetterOf(child);
+            if (setter == null || creature == null) return false;
+
+            try { Native.SetCreature(setter, creature); }
+            catch (Exception e)
+            {
+                MelonLogger.Warning($"[FruitLab] Could not hand over {Diag.Name(child)}: {e.Message}");
+                return false;
+            }
+
+            return true;
+        }
+
+        /// Hands a whole severed assembly over to another body — the limb at the seam
+        /// and everything still hanging off it.
+        ///
+        /// Two passes, in this order, because that is what the game does: every limb is
+        /// told who owns it now, and only then is any of them installed. Installing as
+        /// you go would have the first limb wiring itself into a body whose other new
+        /// limbs still believe they belong somewhere else.
+        ///
+        /// Ownership is per limb, so the whole group has to move. Handing over only the
+        /// limb at the seam leaves a forearm and hand belonging to a body that exists
+        /// nowhere but in their own references — their own blood, and nothing driving
+        /// them.
+        public static int AdoptAll(List<LimbEffectorReceiver> assembly, bam creature)
+        {
+            if (assembly == null || creature == null) return 0;
+
+            int taken = 0;
+            foreach (var ler in assembly)
+                if (ler != null && Adopt(ler, creature)) taken++;
+
+            if (taken == 0) return 0;
+
+            foreach (var ler in assembly)
+            {
+                if (ler == null) continue;
+
+                var setter = CoresSetterOf(ler);
+                if (setter == null) continue;
+
+                try { Native.InstallToAssignedCreature(setter); }
+                catch (Exception e)
+                {
+                    MelonLogger.Warning(
+                        $"[FruitLab] {Diag.Name(ler)} would not install: {e.Message}");
+                }
+            }
+
+            return taken;
+        }
+
+        /// Gives a set of limbs something to drive them.
+        ///
+        /// Needed because the puppeteer travels with the head, not the body. Decapitate
+        /// a creature and the driver leaves with the skull: the torso keeps its blood
+        /// and its consciousness and has nobody at the controls, which is exactly how a
+        /// headless body reads in game. Handing ownership over then makes it worse — a
+        /// head that had a puppeteer loses it to a body that has none — so after any
+        /// hand-over, whichever half still has a driver has to lend it to the rest.
+        ///
+        /// Only limbs that lack one are touched, so this never overwrites a live body's
+        /// own puppeteer with a visitor's.
+        public static int SharePuppeteer(qb puppeteer, List<LimbEffectorReceiver> limbs)
+        {
+            if (puppeteer == null || limbs == null) return 0;
+
+            int given = 0;
+
+            foreach (var ler in limbs)
+            {
+                if (ler == null || PuppeteerOf(ler) != null) continue;
+
+                var setter = CoresSetterOf(ler);
+                if (setter == null) continue;
+
+                try { Native.AssignPuppeteer(setter, puppeteer); given++; }
+                catch (Exception e)
+                {
+                    MelonLogger.Warning(
+                        $"[FruitLab] {Diag.Name(ler)} would not take a puppeteer: {e.Message}");
+                }
+            }
+
+            return given;
+        }
+
+        /// Every limb on whatever body this one belongs to.
+        public static void CollectBody(LimbEffectorReceiver ler, List<LimbEffectorReceiver> into)
+        {
+            into.Clear();
+            if (ler == null) return;
+
+            try
+            {
+                var root = CreatureRootOf(ler);
+                if (root == null) { into.Add(ler); return; }
+
+                foreach (var other in root.GetComponentsInChildren<LimbEffectorReceiver>(true))
+                    if (other != null && !into.Contains(other)) into.Add(other);
+            }
+            catch { into.Add(ler); }
+        }
+
+        /// The interface that owns this limb's creature, or null.
+        public static bcl CoresSetterOf(LimbEffectorReceiver ler)
+        {
+            var refs = RefsOf(ler);
+            if (refs == null) return null;
+            try { return Native.CoresSetter(refs); } catch { return null; }
+        }
+
+        /// What is animating this limb, if anything.
+        public static qb PuppeteerOf(LimbEffectorReceiver ler)
+        {
+            var refs = RefsOf(ler);
+            if (refs == null) return null;
+            try { return Native.Puppeteer(refs); } catch { return null; }
+        }
+
+        public static qb PuppeteerOfCreature(bam creature)
+        {
+            if (creature == null) return null;
+            try { return Native.CreaturePuppeteer(creature); } catch { return null; }
+        }
+
+        /// Every limb whose collider occupies a piece of space.
+        ///
+        /// The allocating OverlapSphere on purpose: the NonAlloc physics overloads
+        /// silently report nothing in this build.
+        public static void ScanNearby(Vector3 centre, float radius,
+                                      List<LimbEffectorReceiver> into)
+        {
+            into.Clear();
+
+            Collider[] hits;
+            try { hits = Physics.OverlapSphere(centre, radius); }
+            catch { return; }
+            if (hits == null) return;
+
+            foreach (var col in hits)
+            {
+                if (col == null) continue;
+
+                LimbEffectorReceiver ler = null;
+                try { ler = Of(col.gameObject); } catch { }
+                if (ler == null || into.Contains(ler)) continue;
+
+                into.Add(ler);
+            }
+        }
+
+        /// Identity for a creature, compared through its GameObject: two managed
+        /// wrappers around the same native object are not necessarily the same
+        /// reference, and AbstractCreature is a MonoBehaviour, so this is exact.
+        public static int CreatureId(bam creature)
+        {
+            if (creature == null) return 0;
+            try { return creature.gameObject.GetInstanceID(); } catch { return 0; }
+        }
+
         /// A world-space point to measure distance to this limb from.
         public static Vector3 SamplePointOf(LimbEffectorReceiver ler)
         {

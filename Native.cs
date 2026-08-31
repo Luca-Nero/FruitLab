@@ -134,5 +134,180 @@ namespace FruitLab
         /// LimitedValue.SetValue — fires the change notification the dependency
         /// solver listens on, which is why the solve can push the value straight back.
         public static void SetValue(bjq p, float value) => p.jdl(value);
+
+        // ── Limb hierarchy ────────────────────────────────────────────────────
+        //
+        // Every limb sits in the creature's node hierarchy as a LimbNode (v0.1: vd),
+        // and attaching or detaching a limb is an operation on that hierarchy rather
+        // than on the transforms or the joints. The physics follows from it.
+
+        /// LimbReferencesPublic.Limb, typed as the limb rather than as an LVA entity.
+        /// AbstractLimb kept its real name in v0.1 and derives from LVAEntity, so this
+        /// is the same object <see cref="LimbEntity"/> hands back.
+        public static Il2CppLVA.Limbs.AbstractLimb Limb(zk refs) => refs.xjw;
+
+        /// LimbReferencesPublic.Node — this limb's place in the hierarchy.
+        public static vd Node(zk refs) => refs.xkb;
+
+        /// LimbNode.HasParent. False for a severed limb — and also for a creature's
+        /// root limb, which never had anything above it, so this alone does not mean
+        /// "came off".
+        public static bool HasParentNode(vd node) => node.rvc;
+
+        /// LimbNode.Parent
+        public static vd ParentNode(vd node) => node.rvb;
+
+        /// AbstractCreature.LimbsHierarchyHandler.Operations —
+        /// CreatureHierarchyOperationsModule, which owns both halves of the job: its
+        /// TryDetach is what the context menu's Detach Limb runs.
+        public static bbn HierarchyOps(bam creature)
+        {
+            var handler = creature.smd;
+            return handler != null ? handler.soe : null;
+        }
+
+        /// CreatureHierarchyOperationsModule.TryAddAsNative(AbstractLimb) — the exact
+        /// inverse of that detach. "Native" is the operative word: it puts the limb
+        /// back where it belongs on *this* creature, deriving the socket from the
+        /// creature's own hierarchy, and returns false for a limb that is not one of
+        /// this creature's own. That refusal is the correctness check, so there is no
+        /// need to work out whether an arm is this body's arm before offering it.
+        public static bool TryAddAsNative(bbn ops, Il2CppLVA.Limbs.AbstractLimb limb) =>
+            ops.ibx(limb);
+
+        /// LimbNode.AttachParent(LimbNode) — the raw node link, below the protocols.
+        /// Kept mapped, unused: it joins two nodes and tells nobody, so the creature
+        /// never learns it has a new limb. AttachThirdparty is the same move done
+        /// properly.
+        public static void AttachParentNode(vd node, vd parent) => node.ham(parent);
+
+        /// AbstractLimb.LaunchLVA(AbstractCreature).
+        ///
+        /// Mapped, and deliberately unused. It does move ownership, but it is the path
+        /// the game takes for a limb that was *never* initialised, and on one whose LVA
+        /// is already running it re-enters module initialisation and hits a double-call
+        /// guard. See ParentCoresSetter below for what the game does with a limb that
+        /// has been severed — which is our case, and which does not throw.
+        public static void LaunchLVA(Il2CppLVA.Limbs.AbstractLimb limb, bam creature) =>
+            limb.hgj(creature);
+
+        // ── Limb ownership: IParentCoresSetter ────────────────────────────────
+        //
+        // This is where a limb's creature actually lives, and the decompiled
+        // NativeLimbAttachModule.TryAddDetachedLimb is what named it. For a severed
+        // limb the game walks the whole detached sub-tree and makes two passes over it:
+        //
+        //     allNodes.ForEach(n => n.assignedLimb.References.ParentCoresSetter
+        //                            .SetCreature(newCreature));      // SetCreatureToNodes
+        //     allNodes.ForEach(n => n.assignedLimb.References.ParentCoresSetter
+        //                            .InstallToAssignedCreature());   // InstallCreatureToNodes
+        //
+        // then attaches the root node. No LaunchLVA anywhere on that path — that is
+        // reserved for the never-initialised case — so no double-call guard to trip.
+        //
+        // IParentCoresSetter is an interface, so there are no decoys, and v0.1's four
+        // members line up with v0.14's declaration order position for position; two of
+        // them are unambiguous on signature alone as well.
+
+        /// LimbReferencesPublic.ParentCoresSetter
+        public static bcl CoresSetter(zk refs) => refs.xkc;
+
+        /// IParentCoresSetter.SetCreature(AbstractCreature) — hands the limb over.
+        public static void SetCreature(bcl setter, bam creature) => setter.idu(creature);
+
+        /// IParentCoresSetter.InstallToAssignedCreature() — the second pass, run only
+        /// once every limb in the group knows who it now belongs to.
+        public static void InstallToAssignedCreature(bcl setter) => setter.idv();
+
+        /// IParentCoresSetter.RemoveCreature()
+        public static void RemoveCreature(bcl setter) => setter.idw();
+
+        /// IParentCoresSetter.AssignPuppeteer(AbstractPuppeteer)
+        public static void AssignPuppeteer(bcl setter, qb puppeteer) => setter.idx(puppeteer);
+
+        /// AbstractCreature.AssignedPuppeteer
+        public static qb CreaturePuppeteer(bam creature) => creature.smc;
+
+        /// LimbNode.assignedLimb
+        public static Il2CppLVA.Limbs.AbstractLimb NodeLimb(vd node) => node.rus;
+
+        /// LimbNode.Native — whether the hierarchy counts this limb among the
+        /// creature's own. Severing costs a limb that standing, which is why
+        /// TryAddAsNative will not take a severed limb back.
+        public static bool IsNodeNative(vd node) => node.rva;
+
+        /// LimbReferencesPublic.AssignedPuppeteer — null on a limb nothing is
+        /// animating, which is the difference between a limb that hangs and one the
+        /// body moves.
+        public static qb Puppeteer(zk refs) => refs.xjv;
+
+        /// AbstractCreature.LimbsHierarchyHandler.Hierarchy — the node graph itself,
+        /// under the operations module.
+        public static ug NodeHierarchy(bam creature)
+        {
+            var handler = creature.smd;
+            return handler != null ? handler.sod : null;
+        }
+
+        // The two native attach paths, and their preconditions.
+        //
+        // Which of gwe/gwg is the child one and which is the parent one is derived from
+        // v0.14's declaration order alone — v0.1 strips the parameter names, and the
+        // xref fingerprints do not carry across for this type (v0.14's
+        // DetachNodeFromParent has 25 xrefs where v0.1's counterpart has 2, so the
+        // scan results are not comparable here). Do not resolve that uncertainty by
+        // guessing: **ask the predicate and call its neighbour.**
+        //
+        // That is safe whichever way round the labels are. gwe/gwf are adjacent in the
+        // sequence and so are gwg/gwh, so each attach sits next to its own
+        // precondition; the pairing holds even if "child" and "parent" are swapped.
+        // Asking costs nothing, since both predicates are read-only.
+
+        public static bool CanAttachAsChild(ug hierarchy, vd node)  => hierarchy.gwf(node);
+        public static void AttachAsChild(ug hierarchy, vd node)     => hierarchy.gwe(node);
+        public static bool CanAttachAsParent(ug hierarchy, vd node) => hierarchy.gwh(node);
+        public static void AttachAsParent(ug hierarchy, vd node)    => hierarchy.gwg(node);
+
+        /// CreatureNodesHierarchy.AttachNodeAsThirdparty(attachedChildRoot, parent).
+        ///
+        /// **The one that makes a foreign limb part of a body.** The game supports
+        /// grafting limbs that are not a creature's own as a first-class thing — there
+        /// is a ThirdpartyNodeAttachProtocol beside the two native ones, and the attach
+        /// data carries a ThirdpartyRadiusIndexesDescription of its own — so this is a
+        /// road the game already paved, not a hole we are climbing through.
+        ///
+        /// Unlike TryAddAsNative it asks nothing about whose limb it was and takes an
+        /// explicit parent, so a hand goes on a shoulder if that is what you want. And
+        /// unlike AttachParentNode it runs the attach protocol, which is what notifies
+        /// NativeLimbListenersHandler — the chain the puppeteer's own listener hangs
+        /// off, and therefore the only way a sutured limb gets animated rather than
+        /// merely held on.
+        ///
+        /// Argument order is (child, parent); v0.1 stripped the parameter names, so
+        /// that is read off v0.14's declaration, where the run gwd…gwk lines up
+        /// signature for signature.
+        public static void AttachThirdparty(ug hierarchy, vd child, vd parent) =>
+            hierarchy.gwi(child, parent);
+
+        // ── Limb physics ──────────────────────────────────────────────────────
+        //
+        // LimbPhysics is one of the types the obfuscator left entirely alone: the run
+        // hjr…hks is unbroken, with no decoys, and m_joint and m_rb kept their real
+        // names. So the joint holding a limb on is a plain Unity ConfigurableJoint,
+        // reachable and configurable without going through anything obfuscated.
+
+        /// LimbReferencesPublic.Physics
+        public static Il2CppLVA.Limbs.LimbPhysics PhysicsOf(zk refs) => refs.xjx;
+
+        /// LimbPhysics.Pivot — the transform the limb hangs from, which is where its
+        /// joint anchor sits.
+        public static Transform Pivot(Il2CppLVA.Limbs.LimbPhysics p) => p.xhl;
+
+        /// LimbPhysics.m_joint — the ConfigurableJoint holding this limb to its
+        /// parent. Null on a limb that was never jointed.
+        public static ConfigurableJoint Joint(Il2CppLVA.Limbs.LimbPhysics p) => p.m_joint;
+
+        /// LimbPhysics.m_rb
+        public static Rigidbody Body(Il2CppLVA.Limbs.LimbPhysics p) => p.m_rb;
     }
 }

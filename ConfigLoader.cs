@@ -90,8 +90,26 @@ namespace FruitLab
             ["RotPitting"]       = "percent of the discoloured front eaten away outright — the surface only re-meshes where something was destroyed, so this is what makes the creeping rot visible at all; also just looks like rotting flesh",
             ["RotMarkDamage"]    = "damage the leading discoloured front deals — 1 just registers the rot with the body without taking anything, raise it to make the creature suffer as it spreads, 0 disables it",
 
+            ["SutureAimRange"]   = "how far you can be from a limb and still click it",
+            ["SutureCarryDistance"] = "how far in front of you a picked-up limb is held to start with; scroll moves it while carrying",
+            ["SutureTurnStep"]      = "degrees a scroll notch turns a carried limb; lower for finer placement",
+            ["SutureRollKey"]       = "hold and scroll to spin a carried limb about the way you are looking",
+            ["SutureTiltKey"]       = "hold and scroll to tip a carried limb up and down",
+            ["SutureCarryRight"]    = "how far to the side a carried limb is held, as a fraction of how far out it is, so it keeps the same spot on screen at any reach; negative holds it to the left",
+            ["SutureCarryUp"]       = "how far above the crosshair a carried limb is held, same units — with SutureCarryRight this keeps the limb from covering the spot you are aiming at",
+            ["SutureSeamOffset"]    = "how far off the surface the seam is built, in metres; the game's own limb joints sit set back from where two limbs meet rather than on the skin, and clicking a surface gives a point that is too deep. Negative sinks the limb into the body instead",
+            ["SutureSeamCollision"]  = "let the sutured limb collide with the body it was sewn to. Leave this off. Two limbs meeting at a joint overlap by design \u2014 that is what a seam is \u2014 so the limb at the join grinds against its new neighbour forever, and the game reads that as impact damage: a sphere of destroyed flesh at the seam, which disconnects the limb and severs it again. Only that one limb is excused; anything hanging off it still collides normally",
+            ["SutureBreakForce"] = "force needed to tear a sutured limb off again; 0 makes the seam unbreakable",
+            ["SutureSettle"]     = "seconds of collision-damage immunity a freshly sutured limb and whatever it touches get; without it the limb becoming solid inside a chest punches a hole in both, and the game severs it again where the flesh went. 0 disables",
+            ["SutureGhost"]      = "show a hologram of the limb where it would attach while you carry it",
+            ["SutureNative"]     = "when a limb is still one of the body's own, put it back in its actual socket rather than where you clicked. That slot is where its node tag lives, and the puppeteer only knows limbs by tag, so it is the one route by which a reattached limb can end up animated instead of hanging. Off means every limb goes exactly where you put it",
+            ["SutureAdopt"]      = "hand the sutured limb over to the body it was sewn to, so it shares that body's vitals and gets animated instead of hanging. Without it a reattached limb sits in the right slot while still belonging to a creature of its own. The whole assembly is handed over, not just the limb at the seam, or a reattached arm ends up with a forearm and hand that still belong elsewhere",
+            ["SutureGraft"]      = "also join the two in the creature hierarchy, not just physically — off gives you a limb that hangs correctly but that the body does not know it has",
+            ["SutureAlign"]      = "rotate the limb so it points out of the surface you attached it to; off keeps whatever pose it was lying in",
             ["VitalsRange"] = "how far the Vitals Monitor reaches when you aim at a body, in metres",
 
+            ["LogDiagnostics"]   = "log what an operation actually does, step by step, with the voxels each step destroys and in which limb; the answer to \"why did that leave a hole\" lives here",
+            ["DiagWindow"]       = "seconds to keep reporting after an operation finishes, so anything the physics does a moment later still shows up",
             ["LogVitals"] = "log each creature's LVA vitals on impact and on expiry; turn on if a body will not stay alive and you need to see which value the game is dragging back down",
         };
 

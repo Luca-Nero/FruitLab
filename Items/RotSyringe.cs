@@ -563,31 +563,22 @@ namespace FruitLab
             catch { return false; }
         }
 
-        /// Every limb currently occupying a piece of space.
-        ///
-        /// OverlapSphere rather than the NonAlloc overload: the NonAlloc physics
-        /// overloads silently report nothing in this build.
+        /// The limbs in a piece of space, by instance id as well as by reference —
+        /// the ids are what a before-and-after comparison is made on.
         private static void ScanLimbs(Vector3 centre, float radius, HashSet<int> ids,
                                       List<LimbEffectorReceiver> lers)
         {
+            Limbs.ScanNearby(centre, radius, _scanLers);
+
             ids.Clear();
-            lers?.Clear();
+            foreach (var ler in _scanLers) ids.Add(ler.GetInstanceID());
 
-            Collider[] hits;
-            try { hits = Physics.OverlapSphere(centre, radius); }
-            catch { return; }
-            if (hits == null) return;
+            // _scanLers is the shared scratch list, so a caller that wants to keep the
+            // limbs has to be handed them separately.
+            if (lers == null || ReferenceEquals(lers, _scanLers)) return;
 
-            foreach (var col in hits)
-            {
-                if (col == null) continue;
-
-                LimbEffectorReceiver ler = null;
-                try { ler = Limbs.Of(col.gameObject); } catch { }
-                if (ler == null) continue;
-
-                if (ids.Add(ler.GetInstanceID())) lers?.Add(ler);
-            }
+            lers.Clear();
+            lers.AddRange(_scanLers);
         }
 
         private static void TickRot(Dose d, float dt)

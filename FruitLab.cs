@@ -20,7 +20,9 @@ namespace FruitLab
         {
             SyringeRack.Register();   // one slot for all three syringes
             RotSyringe.Register();    // severing hook — its slot is the rack's
+            SutureTool.Register();
             VitalsMonitor.Register();
+            Diag.Register();
         }
 
         public static void Update()
@@ -36,7 +38,10 @@ namespace FruitLab
             HealingSyringe.OnUpdate();
             LazarusSyringe.OnUpdate();
             RotSyringe.OnUpdate();
+            SutureTool.OnUpdate();
             VitalsMonitor.OnUpdate();
+
+            Diag.Tick();
         }
 
         public static void FixedUpdate()
@@ -52,7 +57,9 @@ namespace FruitLab
             HealingSyringe.OnSceneReload();
             LazarusSyringe.OnSceneReload();
             RotSyringe.OnSceneReload();
+            SutureTool.OnSceneReload();
             VitalsMonitor.OnSceneReload();
+            Diag.Stop();
             FruitLabHud.Reset();
         }
 
@@ -66,7 +73,11 @@ namespace FruitLab
 
         /// Items that draw. Kept separate: OnGUI runs several times a frame, so
         /// nothing that is not drawing should be on this path.
-        public static void DrawGUI() => VitalsMonitor.OnGUI();
+        public static void DrawGUI()
+        {
+            VitalsMonitor.OnGUI();
+            SutureTool.OnGUI();
+        }
 
         /// Cheap gate for <see cref="PatchOrganDestroyLVA"/>: is any item doing
         /// something that needs organs kept alive?

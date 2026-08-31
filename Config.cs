@@ -32,10 +32,30 @@ namespace FruitLab
         [MenuCategory("Flesh Rot")] public static float RotMarkDamage    = 1f;
         [MenuCategory("Flesh Rot")] public static float RotPitting       = 6f;
 
+        // ── Suture Tool ───────────────────────────────────────────────────────────
+        [MenuCategory("Suture Tool")] public static float SutureAimRange      = 8f;
+        [MenuCategory("Suture Tool")] public static float SutureCarryDistance = 1.1f;
+        [MenuCategory("Suture Tool")] public static float SutureTurnStep      = 7.5f;
+        [MenuCategory("Suture Tool")] public static KeyCode SutureRollKey     = KeyCode.LeftAlt;
+        [MenuCategory("Suture Tool")] public static KeyCode SutureTiltKey     = KeyCode.LeftControl;
+        [MenuCategory("Suture Tool")] public static float SutureCarryRight    = 0.34f;
+        [MenuCategory("Suture Tool")] public static float SutureCarryUp       = 0.20f;
+        [MenuCategory("Suture Tool")] public static float SutureSeamOffset    = 0.02f;
+        [MenuCategory("Suture Tool")] public static float SutureBreakForce    = 0f;
+        [MenuCategory("Suture Tool")] public static bool  SutureSeamCollision = false;
+        [MenuCategory("Suture Tool")] public static bool  SutureNative        = true;
+        [MenuCategory("Suture Tool")] public static bool  SutureGraft         = true;
+        [MenuCategory("Suture Tool")] public static bool  SutureAdopt         = true;
+        [MenuCategory("Suture Tool")] public static float SutureSettle        = 0.4f;
+        [MenuCategory("Suture Tool")] public static bool  SutureGhost         = true;
+        [MenuCategory("Suture Tool")] public static bool  SutureAlign         = true;
+
         // ── Vitals Monitor ────────────────────────────────────────────────────────
         [MenuCategory("Vitals Monitor")] public static float VitalsRange = 25f;
 
         // ── Debug ─────────────────────────────────────────────────────────────────
-        [MenuCategory("Debug")] public static bool LogVitals = false;
+        [MenuCategory("Debug")] public static bool  LogVitals       = false;
+        [MenuCategory("Debug")] public static bool  LogDiagnostics  = false;
+        [MenuCategory("Debug")] public static float DiagWindow      = 2.5f;
     }
 }

@@ -91,6 +91,205 @@ djj -> PositionToVoxelIndexUnclamped(pos, rot, scale, p, round)
 djk -> GetVoxelSizeOffset
 ```
 
+### Limb ownership is not node membership
+A limb can sit in the correct slot of the correct creature's node hierarchy and
+still belong to a creature of its own. Severing gives it one (see the
+dismemberment notes), and **nothing in the hierarchy API takes that away**:
+`AttachChildAsNative`, `AttachNodeAsThirdparty` and
+`CreatureHierarchyOperationsModule.TryAddAsNative` all leave `AssignedCreature`
+pointing at the old owner. In game that is a limb that hangs off the body,
+carries its own blood and vitals, and is animated by nothing.
+
+#### `bcl` — `IParentCoresSetter` (this is where ownership lives)
+Reached as `zk.xkc` (`LimbReferencesPublic.ParentCoresSetter`). An interface, so no
+decoys, and v0.1's four members line up with v0.14's declaration order position
+for position — two are unambiguous on signature alone as well.
+```
+idu -> SetCreature(AbstractCreature)      idv -> InstallToAssignedCreature()
+idw -> RemoveCreature()                   idx -> AssignPuppeteer(AbstractPuppeteer)
+```
+From the Ghidra decompile of `NativeLimbAttachModule.TryAddDetachedLimb`, the game
+hands a **severed** limb over like this — the whole detached sub-tree, in two
+separate passes, then the node attach:
+```csharp
+allNodes = node.hierarchyNavigator.GetAllNodes();
+allNodes.ForEach(n => n.assignedLimb.References.ParentCoresSetter.SetCreature(creature));
+allNodes.ForEach(n => n.assignedLimb.References.ParentCoresSetter.InstallToAssignedCreature());
+asParent ? AttachParentAsNative(node) : AttachChildAsNative(node);
+```
+Both passes complete before the other begins, and there is **no LaunchLVA** on this
+path. Ownership is per limb, so the whole group has to move together.
+
+`AbstractLimb.hgj` -> `LaunchLVA(AbstractCreature)` also moves ownership, but it is
+the path for a limb that was *never initialised* (`TryAddNonInitializedLimb`, which
+pairs it with `ParentCoresSetter.SetCreature` and no node walk). On a limb whose LVA
+is already up it re-enters module initialisation and trips a double-call guard —
+which is why the two-pass route above is the one to use. It is the sole
+class-level `void(bam)` on `AbstractLimb`, so there is no ambiguity — the other
+eight candidates sit on the nested `AbstractLimb.wv` (`LimbSystemCore`), where
+`OnAssignCreatureCore` / `OnRemoveCreatureCore` live and are per-system
+notifications, not levers.
+
+**It throws, and it works anyway.** On a limb whose LVA is already running:
+```
+Double call of this method is not allowed. / Sender type : LVA.Limbs.Variants.Arm
+  at bcx+bcp.ife ()
+  at LVA.Limbs.References.LimbReferencesPrivate.hvi (bam a, …)
+  at LVA.Limbs.AbstractLimb.hgj (bam a)
+```
+The references — creature *and* puppeteer — are assigned inside `hvi` before
+module initialisation is re-run and hits its double-call guard, so the exception
+is the tail of the call, not the whole of it. **Judge it by reading
+`AssignedCreature` back, never by whether it threw**; reporting the throw as a
+failure hid a working adoption behind a stack trace for a round.
+
+Ownership is per limb, so a severed *assembly* needs every limb relaunched, not
+just the one at the seam.
+
+### Limb hierarchy — attach and detach
+A limb's place on a body is a node in the creature's hierarchy. Attaching and
+detaching are operations on that hierarchy; the joints and transforms follow.
+
+| v0.1 | Real name |
+|------|-----------|
+| `vd` | `LVA.NodesHierarchy.Nodes.LimbNode` |
+| `vj` | `…Nodes.INodeSystem` |
+| `bbn` | `LVA.Creatures.Hierarchy.CreatureHierarchyOperationsModule` |
+| `bbo` | `…Hierarchy.LimbDetachModule` |
+| `bbp` | `…Hierarchy.LimbsHierarchyHandler` |
+| `bbq` | `…Hierarchy.NativeLimbAttachModule` |
+| `bio` | `IAbstractCreatureFactory` |
+
+```
+bam.smd  -> AbstractCreature.LimbsHierarchyHandler   (getter bam.hyo)
+bbp.soe  -> LimbsHierarchyHandler.Operations         (getter bbp.ici)
+bbn.ibx  -> CreatureHierarchyOperationsModule.TryAddAsNative(AbstractLimb)
+bbn.iby  ->   …TryDetach(AbstractLimb, AbstractCreature)   ← the context menu's
+bbn.ibz  ->   …DetachChildren(AbstractLimb)                  Detach Limb
+bbq.ict  -> NativeLimbAttachModule.TryAddLimbAsNative(AbstractLimb)
+bbo.icc  -> LimbDetachModule.TryDetach(AbstractLimb, AbstractCreature)
+```
+`bbn`'s three public methods are the sequential run `ibx`/`iby`/`ibz`, and their
+signatures are distinct enough to place each one without relying on order —
+which matters here, because **v0.1 declares them in a shuffled order** while
+v0.14 does not. Cross-check: `bbn`'s two fields are `snw : bbq` and `snx : bbo`,
+matching v0.14's `m_nativeLimbAttachModule` and `m_detachModule`.
+
+`TryAddAsNative` is the exact inverse of the detach the context menu runs, and
+**it will not put a severed limb back on.** Tested: arm cut off at the shoulder,
+offered straight back to the body it came from, aiming at the torso and at the
+arm — refused both times, 0 of 1. Severing evidently costs a limb its native
+standing with the creature (`LimbNode.Native`, `vd.rva`, is a public setter, so
+that is the first thing to try if this is ever revisited). It is for limbs that
+were never removed, not for putting one back on. Use `vd.ham` and own the physics
+— see `Items/SutureTool.cs`.
+
+#### `vd` — `LimbNode`
+```
+rva -> Native (get/set)     rvb -> Parent      rvc -> HasParent
+xfs -> Children             xft -> LimbHierarchyCallbacksReceivers
+xfu -> CreatureHierarchyCallbacksReceivers     xfv -> CreatureHierarchyCallbacksSender
+hal -> AddSystem(INodeSystem)                  ham -> AttachParent(LimbNode)
+han -> DetachParent()       hao/hap -> AttachChildInternal / DetachChildInternal
+```
+Real run `hab`…`hap`; v0.14 declares Native, Parent, HasParent, Children in that
+order, which is how the three getters were told apart.
+
+`HasParent` is false for a severed limb *and* for a creature's root limb, so it
+means "unheld", not "came off". A severed limb also gets a fresh creature of its
+own (LimbDetachModule holds an `IAbstractCreatureFactory`), so its joint and its
+transform parent both look perfectly reasonable — the node is the honest answer.
+
+`ham` is the raw node link, below the protocols: it joins two nodes and tells
+nobody, so the creature never learns it has a new limb. Use `ug.gwi` instead.
+
+#### `ug` — `CreatureNodesHierarchy`
+Reached as `bam.smd.sod` (`AbstractCreature.LimbsHierarchyHandler.Hierarchy`).
+Real run `gwd`…`gwk`, in v0.14's declaration order, every signature matching its
+position:
+```
+gwd -> ExternalEvents (uk = IExternalHierarchyEvents)
+gwe -> AttachChildAsNative(LimbNode)        gwf -> CanChildBeAttachedAsNative(LimbNode)
+gwg -> AttachParentAsNative(LimbNode)       gwh -> CanParentBeAttachedAsNative(LimbNode)
+gwi -> AttachNodeAsThirdparty(attachedChildRoot, parent)
+gwj -> DetachNodeFromParent(LimbNode, out IReadOnlyList<LimbNode>)
+gwk -> SetNewRoot(LimbNode, out IReadOnlyList<LimbNode>, out LimbNode)
+```
+`gwi`, `gwj`, `gwk` are unambiguous on signature alone. `gwe`/`gwg` and
+`gwf`/`gwh` are **not**: v0.1 strips the parameter names, and the xref
+fingerprints do not carry across for this type — v0.14's `DetachNodeFromParent`
+has 25 xrefs where v0.1's counterpart has 2, so the scan results are not
+comparable here and the usual tell (see the decoy-tells notes) is unavailable.
+Only the CallerCount *shape* survives: both `Can…` predicates are the two with a
+high count in either version (3 in v0.14, 6 in v0.1), which confirms `gwf`/`gwh`
+are the predicates without saying which is which.
+
+Do not resolve the rest by guessing. **Ask the predicate and call its neighbour:**
+`gwe`/`gwf` are adjacent in the sequence and so are `gwg`/`gwh`, so each attach
+sits next to its own precondition, and the pairing holds even if "child" and
+"parent" are the wrong way round. Both predicates are read-only, so asking both
+costs nothing — which is what `Limbs.GraftNative` does.
+
+**Confirmed in-game since:** a severed left arm offered to its own body reported
+`as child True, as parent False`, and calling `gwe` parented it under
+`Spine_1Prefab` with `Native` still true — which is `AttachChildAsNative`
+behaving as itself and not `AttachParentAsNative`. So `gwe`/`gwf` are the child
+pair and `gwg`/`gwh` the parent pair, by observation rather than by position.
+
+**`gwi` is the one that makes a foreign limb part of a body.** Grafting a limb
+that is not a creature's own is a first-class feature here, not a hole to climb
+through: `ThirdpartyNodeAttachProtocol` sits beside `NativeChildNodeAttachProtocol`
+and `NativeParentAttachProtocol`, and `AsChildLimbAttachData` carries a
+`ThirdpartyRadiusIndexesDescription` next to the native one. Unlike
+`TryAddAsNative` it asks nothing about whose limb it was and takes an explicit
+parent; unlike `ham` it runs the attach protocol, which notifies
+`NativeLimbListenersHandler` — the chain the puppeteer's own listener hangs off,
+and therefore the only route by which a grafted limb gets animated instead of
+hanging limp. Argument order is (child, parent), read off v0.14.
+
+Related: `qb` = `AbstractPuppeteer`, whose `ggt` is `GetLimb(AbstractNodeTag)` —
+the puppeteer addresses limbs **by node tag**, so a slot the body already has
+filled has no second opening.
+
+### `LimbPhysics` (real name in v0.1) — and the joint
+The obfuscator left this type **entirely alone**: `hjr`…`hks` is an unbroken run
+with no decoys, in v0.14's declaration order, and `m_joint` and `m_rb` kept their
+real names. The joint holding a limb on is therefore a plain Unity
+`ConfigurableJoint`, reachable and configurable without touching anything
+obfuscated — which is the whole reason the Suture Tool can wire one by hand.
+```
+sam -> RbProvider (xf = ILimbRigidbodyProvider)   san -> JointProvider (xh)
+sao -> Colliders (xe = ILimbCollider)             xhl -> Pivot (Transform)
+xhm -> PivotPosition   xhn -> PivotRotation
+xho -> RbPosition      xhp -> RbRotation
+m_joint : ConfigurableJoint      m_rb : Rigidbody
+```
+
+#### `xh` — `LimbJointProvider`
+Real run `hjg`…`hjq`.
+```
+hjg/hjh/hji -> MaximumForce / PositionDamper / PositionSpring  (get, order unverified)
+hjj -> SetConnectedBody(ILimbRigidbodyProvider, Vector3)
+hjk -> SetTargetRotation(Quaternion)      hjl -> SetSlerpDrive(JointDrive)
+hjm/hjn -> SetLinearMotionType / SetAngularMotionType  (order unverified)
+hjo/hjp -> SetBreakForce / SetBreakTorque              (order unverified)
+hjq -> ProcessBreakEvent()
+```
+`hjj` is unambiguous on signature. Unused so far: what its `Vector3` means — world
+anchor or connected anchor — is a guess, and configuring `m_joint` directly is
+fully determined. Reach for it if the muscle drives turn out to ignore a joint
+that was rewired behind the provider's back. Note v0.1 has no `get_ConnectedBody`;
+read `m_joint.connectedBody`.
+
+
+**Decoy note:** the obfuscator copies real *parameter* names into its decoys.
+`vd.maj` and `vd.bee` both read `void (vd attachedParent)`, identical to the real
+`ham`. Parameter names confirm what a method *is* once you have it; they do not
+pick it out of a lineup. The sequential-name run still does. `xb` (`LimbUtils`)
+is the extreme case — five `Public_Static_Boolean_Collider_byref_AbstractLimb`
+overloads, all randomly named; going through `LimbEffectorReceiver` avoids
+needing to choose.
+
 ### `LimbDismembermentModule` (real name in v0.1)
 Reached from `zk.xka`. Members are sequential `hhq`…`hhw` / `rxr`…`rxz`, so they
 are the real ones. Matched to v0.14 by signature:
