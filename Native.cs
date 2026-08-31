@@ -46,6 +46,13 @@ namespace FruitLab
         public static Vector3Int PositionToVoxelIndex(VoxelMesh mesh, Vector3 p) =>
             ct.dja(mesh, p);
 
+        /// VoxelTools.VoxelIndexToWorldPosition(mesh, index) — the inverse of the
+        /// above. There are three (VoxelMesh, int3) overloads; this is the one that
+        /// accounts for the mesh's rotation, which matters the moment a body falls
+        /// over. ct.djc is the matrix variant and ct.djg ignores rotation entirely.
+        public static Vector3 VoxelIndexToWorldPosition(VoxelMesh mesh, Vector3Int i) =>
+            ct.djd(mesh, Index(i.x, i.y, i.z));
+
         // ── IndexEffectorSignal ───────────────────────────────────────────────
         /// int3 without the interop constructor call — int3 is a real struct in
         /// the generated bindings, but `new int3(x,y,z)` marshals into IL2CPP.

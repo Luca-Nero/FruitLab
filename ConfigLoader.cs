@@ -80,6 +80,16 @@ namespace FruitLab
             ["LazarusDuration"] = "seconds a Lazarus dose keeps a body alive before it runs out",
             ["LazarusInterval"] = "seconds between vitals top-ups while a dose is running — lower reacts faster, higher costs less",
 
+            ["RotSpreadSeconds"] = "seconds the rot takes to cross a joint into the next limb",
+            ["RotSpreadAt"]      = "how far through a limb the discolouration gets before the next limb is infected (0-1)",
+            ["RotWaveSpeed"]     = "voxel-units the discolouration front advances per tick",
+            ["RotNecrosisLag"]   = "voxel-units the blackening trails behind the discolouration",
+            ["RotDeathLag"]      = "voxel-units the destruction trails behind the blackening — how long dead flesh is left standing before it goes",
+            ["RotTickInterval"]  = "seconds between rot ticks",
+            ["RotDamage"]        = "destruction dealt per rotted voxel; high enough that flesh actually goes",
+            ["RotPitting"]       = "percent of the discoloured front eaten away outright — the surface only re-meshes where something was destroyed, so this is what makes the creeping rot visible at all; also just looks like rotting flesh",
+            ["RotMarkDamage"]    = "damage the leading discoloured front deals — 1 just registers the rot with the body without taking anything, raise it to make the creature suffer as it spreads, 0 disables it",
+
             ["VitalsRange"] = "how far the Vitals Monitor reaches when you aim at a body, in metres",
 
             ["LogVitals"] = "log each creature's LVA vitals on impact and on expiry; turn on if a body will not stay alive and you need to see which value the game is dragging back down",

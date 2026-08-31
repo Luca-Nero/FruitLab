@@ -21,6 +21,17 @@ namespace FruitLab
         [MenuCategory("Lazarus Syringe")] public static float LazarusDuration = 30f;
         [MenuCategory("Lazarus Syringe")] public static float LazarusInterval = 0.1f;
 
+        // ── Flesh Rot Syringe ─────────────────────────────────────────────────────
+        [MenuCategory("Flesh Rot")] public static float RotSpreadSeconds = 2.5f;
+        [MenuCategory("Flesh Rot")] public static float RotSpreadAt      = 0.55f;
+        [MenuCategory("Flesh Rot")] public static float RotWaveSpeed     = 0.35f;
+        [MenuCategory("Flesh Rot")] public static float RotNecrosisLag   = 4f;
+        [MenuCategory("Flesh Rot")] public static float RotDeathLag      = 3f;
+        [MenuCategory("Flesh Rot")] public static float RotTickInterval  = 0.08f;
+        [MenuCategory("Flesh Rot")] public static float RotDamage        = 50000f;
+        [MenuCategory("Flesh Rot")] public static float RotMarkDamage    = 1f;
+        [MenuCategory("Flesh Rot")] public static float RotPitting       = 6f;
+
         // ── Vitals Monitor ────────────────────────────────────────────────────────
         [MenuCategory("Vitals Monitor")] public static float VitalsRange = 25f;
 

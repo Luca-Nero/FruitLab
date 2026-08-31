@@ -1,4 +1,3 @@
-using FruitLib;
 using Il2Cpp;
 using Il2CppEffectors;
 using Il2CppLVA.Organs.EffectorsPerception.Collectors;
@@ -21,9 +20,9 @@ namespace FruitLab
     // ══════════════════════════════════════════════════════════════════════════════
     internal static class HealingSyringe
     {
-        public const string ItemId = "FruitLab:HealingSyringe";
+        public const string DisplayName = "Healing Syringe";
 
-        private static readonly Color FullColor  = new Color(0.75f, 0.93f, 1f,   1f);
+        public  static readonly Color IconColor  = new Color(0.75f, 0.93f, 1f,   1f);
         private static readonly Color SpentColor = new Color(0.32f, 0.34f, 0.36f, 1f);
         private static readonly Vector3 PropScale = new Vector3(0.015f, 0.015f, 0.12f);
 
@@ -40,7 +39,6 @@ namespace FruitLab
         private const float RecheckInterval = 0.1f;
 
         private static readonly List<Syringe> _live = new List<Syringe>();
-        private static bool _equipped;
 
         // ── Item state ────────────────────────────────────────────────────────
 
@@ -98,53 +96,20 @@ namespace FruitLab
             public float SettleAccum;
             public int   RestoredTotal;
             public bool  DumpedBefore;
+            public bool  WarnedHeadless;
             public bool  WarnedEmpty;              // "no healable limbs" logs once
-        }
-
-        // ══════════════════════════════════════════════════════════════════════════
-        // Toolbar item
-        // ══════════════════════════════════════════════════════════════════════════
-
-        public static void Register()
-        {
-            FruitToolbar.Register(new FruitToolbarItem
-            {
-                Id           = ItemId,
-                Name         = "Healing Syringe",
-                Icon         = FruitToolbar.MakeSolidIcon(FullColor),
-                OnSelected   = OnSelected,
-                OnDeselected = OnDeselected,
-            });
-        }
-
-        private static void OnSelected(int slot)
-        {
-            _equipped = true;
-            MelonLogger.Msg($"[FruitLab] Healing Syringe equipped (slot {slot + 1}).");
-        }
-
-        private static void OnDeselected(int slot) => _equipped = false;
-
-        /// FruitToolbar drops its selection on a scene change without dispatching the
-        /// deselect callback, so the equipped flag has to be cleared here or the
-        /// syringe stays armed on left click into the next scene. Scene load has also
-        /// already destroyed every prop and limb we were holding.
-        public static void OnSceneReload()
-        {
-            _equipped = false;
-            _live.Clear();
         }
 
         // ══════════════════════════════════════════════════════════════════════════
         // Frame loops
         // ══════════════════════════════════════════════════════════════════════════
 
+        /// Scene load has already destroyed every prop and limb we were holding.
+        /// Selection is the rack's business, not ours.
+        public static void OnSceneReload() => _live.Clear();
+
         public static void OnUpdate()
         {
-            // Clicks aimed at FruitLib's menu are not gameplay input.
-            if (!FruitMenu.BlocksGameplayInput && _equipped && Input.GetMouseButtonDown(0))
-                Throw();
-
             if (_live.Count == 0) return;
             float dt = Time.deltaTime;
 
@@ -238,7 +203,7 @@ namespace FruitLab
             var cam = Camera.main;
             if (cam == null) return;
 
-            var obj = Props.Spawn("FruitLab_Syringe", PropScale, FullColor);
+            var obj = Props.Spawn("FruitLab_Syringe", PropScale, IconColor);
             if (obj == null) return;
 
             Vector3 muzzle = cam.transform.position;
@@ -533,9 +498,29 @@ namespace FruitLab
                 Vitals.Dump("before restore — outputs", outputs);
             }
 
+            // A headless body is mended and then left alone: the wounds close, nothing
+            // is given back.
+            //
+            // Holding consciousness back on its own does not work, because it is an
+            // output. Losing the head removes the brain's influence on it rather than
+            // pinning it to zero, so with blood restored the solver simply computed the
+            // torso awake again — which it duly did, standing and holding balance with
+            // no head on it. The gate has to be on the input side, and putting blood
+            // back into a torso was never a sensible thing to do anyway.
+            if (!Limbs.HasHead(s.CreatureRoot))
+            {
+                if (!s.WarnedHeadless)
+                {
+                    s.WarnedHeadless = true;
+                    MelonLogger.Msg("[FruitLab] No head on this one — mending it, but not waking it.");
+                }
+                return 0;
+            }
+
             // Death also throws a switch outside the LVA graph: the feet are swapped to a
             // frictionless material so the corpse slides, and nothing ever swaps them
-            // back. Without this a revived body walks on ice.
+            // back. Without this a revived body walks on ice. This is part of waking it,
+            // so it sits below the headless check.
             Puppeteer.RestoreFootFriction(s.CreatureRoot);
 
             // Inputs first: with the solver's own figures right, the solve that follows

@@ -1,4 +1,3 @@
-using FruitLib;
 using Il2Cpp;
 using Il2CppEffectors;
 using MelonLoader;
@@ -20,14 +19,13 @@ namespace FruitLab
     // ══════════════════════════════════════════════════════════════════════════════
     internal static class LazarusSyringe
     {
-        public const string ItemId = "FruitLab:LazarusSyringe";
+        public const string DisplayName = "Lazarus Syringe";
 
-        private static readonly Color FullColor  = new Color(1f, 0.78f, 0.29f, 1f);   // amber
+        public  static readonly Color IconColor  = new Color(1f, 0.78f, 0.29f, 1f);   // amber
         private static readonly Color SpentColor = new Color(0.36f, 0.31f, 0.22f, 1f);
         private static readonly Vector3 PropScale = new Vector3(0.015f, 0.015f, 0.12f);
 
         private static readonly List<Dose> _live = new List<Dose>();
-        private static bool _equipped;
 
         private sealed class Dose
         {
@@ -57,45 +55,17 @@ namespace FruitLab
         }
 
         // ══════════════════════════════════════════════════════════════════════════
-        // Toolbar item
+        // Frame loops
         // ══════════════════════════════════════════════════════════════════════════
-
-        public static void Register()
-        {
-            FruitToolbar.Register(new FruitToolbarItem
-            {
-                Id           = ItemId,
-                Name         = "Lazarus Syringe",
-                Icon         = FruitToolbar.MakeSolidIcon(FullColor),
-                OnSelected   = OnSelected,
-                OnDeselected = OnDeselected,
-            });
-        }
-
-        private static void OnSelected(int slot)
-        {
-            _equipped = true;
-            MelonLogger.Msg($"[FruitLab] Lazarus Syringe equipped (slot {slot + 1}).");
-        }
-
-        private static void OnDeselected(int slot) => _equipped = false;
 
         public static void OnSceneReload()
         {
-            _equipped = false;
             _live.Clear();
             Vitals.UnfreezeAll();
         }
 
-        // ══════════════════════════════════════════════════════════════════════════
-        // Frame loops
-        // ══════════════════════════════════════════════════════════════════════════
-
         public static void OnUpdate()
         {
-            if (!FruitMenu.BlocksGameplayInput && _equipped && Input.GetMouseButtonDown(0))
-                Throw();
-
             if (_live.Count == 0) return;
             float dt = Time.deltaTime;
 
@@ -187,7 +157,7 @@ namespace FruitLab
             var cam = Camera.main;
             if (cam == null) return;
 
-            var obj = Props.Spawn("FruitLab_Lazarus", PropScale, FullColor);
+            var obj = Props.Spawn("FruitLab_Lazarus", PropScale, IconColor);
             if (obj == null) return;
 
             Vector3 muzzle = cam.transform.position;

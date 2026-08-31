@@ -18,8 +18,8 @@ namespace FruitLab
     {
         public static void Register()
         {
-            HealingSyringe.Register();
-            LazarusSyringe.Register();
+            SyringeRack.Register();   // one slot for all three syringes
+            RotSyringe.Register();    // severing hook — its slot is the rack's
             VitalsMonitor.Register();
         }
 
@@ -29,8 +29,13 @@ namespace FruitLab
             if (!FruitLib.FruitMenu.BlocksGameplayInput && Input.GetKeyDown(Config.RecallKey))
                 RecallAll();
 
+            // The rack first: a syringe thrown this frame should still tick this
+            // frame, the way it did when each syringe read the click itself.
+            SyringeRack.OnUpdate();
+
             HealingSyringe.OnUpdate();
             LazarusSyringe.OnUpdate();
+            RotSyringe.OnUpdate();
             VitalsMonitor.OnUpdate();
         }
 
@@ -38,12 +43,15 @@ namespace FruitLab
         {
             HealingSyringe.OnFixedUpdate();
             LazarusSyringe.OnFixedUpdate();
+            RotSyringe.OnFixedUpdate();
         }
 
         public static void SceneReload()
         {
+            SyringeRack.OnSceneReload();
             HealingSyringe.OnSceneReload();
             LazarusSyringe.OnSceneReload();
+            RotSyringe.OnSceneReload();
             VitalsMonitor.OnSceneReload();
             FruitLabHud.Reset();
         }
@@ -53,6 +61,7 @@ namespace FruitLab
         {
             HealingSyringe.RecallAll();
             LazarusSyringe.RecallAll();
+            RotSyringe.RecallAll();
         }
 
         /// Items that draw. Kept separate: OnGUI runs several times a frame, so

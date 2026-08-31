@@ -91,6 +91,38 @@ djj -> PositionToVoxelIndexUnclamped(pos, rot, scale, p, round)
 djk -> GetVoxelSizeOffset
 ```
 
+### `LimbDismembermentModule` (real name in v0.1)
+Reached from `zk.xka`. Members are sequential `hhq`…`hhw` / `rxr`…`rxz`, so they
+are the real ones. Matched to v0.14 by signature:
+```
+hhq -> Construct(IAbstractLimbsFactory, IAbstractCreatureFactory)
+hhr -> add_OnDismember     hhs -> remove_OnDismember
+hht -> Initialize(PrefabID, EntityInternalCollectionsHandler<…>, VoxelMesh,
+                  LimbPhysics, ICreatureHandler, int)
+hhu -> GetAncestorVoxelIndex()          hhv -> GetAncestorVoxelIndexPosition()
+hhw -> CreateNewLimbsFromNewMeshesData(IReadOnlyList<SeparatedMeshData>,
+                                       IReadOnlyCollection<int3>)
+rxr -> OnDismember (the delegate field behind hhr/hhs)
+```
+`hht`'s parameter list is an exact match; `hhq` takes two arguments where v0.14
+takes three, because v0.14 added `IVoxelMeshPaintService` (and the matching
+`m_surfacePaintService` field, absent in v0.1).
+
+`hhw` carries `CallerCount(0)` but a 115-wide xref span: it is registered as
+`SeparationPerformer`'s `m_customCreateNewMeshesMethod` and only ever invoked
+through that delegate. Harmony still catches it — the detour is on the native
+method, which is where the delegate lands.
+
+**Dismemberment is mesh separation, and it replaces limbs rather than modifying
+them.** When destruction disconnects a group of voxels, `SeparationPerformer`
+splits the mesh and `hhw` builds a *brand new limb* per group out of the limb
+prefab. `SeparatedMeshData` carries voxel indexes (`enabledVoxelsIntIndexes`,
+`enabledVoxelsVectorIndexes`, `m_ancestorIndex`) and nothing else — no colours —
+so a severed piece comes out as untouched flesh under a `LimbEffectorReceiver`
+nothing has ever seen. Anything a mod is doing to a limb therefore *vanishes* the
+moment that limb is severed, and looks like the flesh healing itself. Follow it
+by hooking `hhw` and adopting the pieces (see `Dismemberment.cs`).
+
 ### `rx.gqz` -> `AbstractOrgan.DestroyLVA()`
 `AbstractOrgan` has nine public no-argument `void` methods in v0.1 and only
 three in v0.12, so position matching fails — six are decoys. Identified from the
@@ -415,3 +447,24 @@ parameters `tl` `tm` `ud`. That is the whole list.
 **The diagnostic that settles this class of question: read a pristine body first.** Every
 figure above had been rationalised as injury for several sessions purely because a healthy
 baseline had never been taken.
+
+## Voxel colour only becomes visible where topology changed
+
+`Voxels.dfc` writes the colour and `VoxelMesh.dgq` returns cleanly, but a chunk whose
+voxels merely changed *colour* is not re-meshed — only one whose enabled-state changed
+is. So painted-but-intact flesh keeps its old surface indefinitely, and the new colour
+appears only when something near it is destroyed and the chunk gets rebuilt for that.
+
+This is why BloodColor works and looks like it proves otherwise: it recolours interior
+flesh (`R−G ≥ 60` excludes skin), which is invisible until a cut exposes it — and a cut
+is a topology change. It never had to make a colour change visible on undisturbed skin.
+
+**To show a colour change on intact flesh, something in that chunk has to be destroyed.**
+FruitLab's rot eats a hashed scattering of the discoloured front (`RotPitting`) for
+exactly this reason; the pitting is also, conveniently, what rotting flesh looks like.
+
+**`dgq` is the only way to make it visible.** Destroying a voxel does make the game
+re-mesh that chunk, but from its own *changed-data map* — only voxels the game itself
+altered — so a colour a mod wrote into the array is not picked up. Painting without `dgq`
+shows nothing at all. It throws a duplicate-key from `dhh` (Show) every time; swallow and
+throttle it, but do not remove it.
