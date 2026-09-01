@@ -10,20 +10,6 @@ namespace FruitLab
 {
     // ══════════════════════════════════════════════════════════════════════════════
     // Flesh Rot Syringe — a self-contained FruitLab item.
-    //
-    // The Healing Syringe's opposite number, and deliberately not just a heal wave with
-    // the sign flipped. Healing radiates through *space* from one point, reaching every
-    // limb at once in proportion to how far away it is. Rot travels through *flesh*: it
-    // takes the hand, then the forearm, then the upper arm, then the torso, entering each
-    // limb at the joint it arrived through. A syringe in the wrist should never blacken a
-    // foot before it has eaten an elbow.
-    //
-    // Three fronts run per limb, each trailing the last: discolouration ahead of the
-    // damage, blackening behind it, and destruction behind that. Blackening and
-    // destruction were one front to begin with, which meant a voxel was painted black and
-    // switched off in the same tick — the black was never drawn once. Destruction goes
-    // through the game's own damage path, so the body bleeds, comes apart and dies of it
-    // properly rather than merely losing voxels.
     // ══════════════════════════════════════════════════════════════════════════════
     internal static class RotSyringe
     {
@@ -33,50 +19,53 @@ namespace FruitLab
         private static readonly Color SpentColor = new Color(0.22f, 0.14f, 0.17f, 1f);
         private static readonly Vector3 PropScale = new Vector3(0.015f, 0.015f, 0.12f);
 
-        /// Sick purple-red, ahead of the damage; and the dead black that follows it.
         private static readonly Color32 RotTint  = new Color32(96, 28, 52, 255);
         private static readonly Color32 DeadTint = new Color32(20, 13, 15, 255);
 
-        /// Ticks between mesh rebuilds. The paint is already in the voxel array, so this
-        /// only decides how promptly it becomes visible — and how often the rebuild's
-        /// known throw is provoked.
         private const int RebuildEvery = 2;
 
-        /// Ticks a limb may fail to hand over its voxel grid before it is given up on.
         private const int MaxMeshMisses = 24;
+
+        private const int SeatSearch = 4;
+
+        private const float ClaimDelay  = 0.15f;
+        private const float ClaimWindow = 1.5f;
+
+        private static readonly HashSet<int>               _scanIds  = new HashSet<int>();
+        private static readonly List<LimbEffectorReceiver> _scanLers = new List<LimbEffectorReceiver>();
 
         private static readonly List<Dose> _live = new List<Dose>();
 
-        /// One limb the rot has reached.
         private sealed class Infection
         {
             public LimbEffectorReceiver Ler;
             public VoxelMesh            Mesh;
             public int                  Len, Hgt, Wid;
-            public Vector3Int           Origin;      // where the rot entered this limb
-            public float                StartAt;     // seconds into the dose
-            public float                Front;       // discolouration, leading
-            public float                Necrosis;    // blackening, trailing the above
-            public float                Death;       // destruction, trailing the above
-            public float                MaxRadius;
-            public int                  SincePaint;  // ticks since the mesh was rebuilt
-            public int                  Misses;      // consecutive failures to read the mesh
+
+            public float[]              Marked;
+            public List<Vector3Int>     Edge     = new List<Vector3Int>();
+            public List<Vector3Int>     Rotting  = new List<Vector3Int>();
+            public List<Vector3Int>     Dying    = new List<Vector3Int>();
+
+            public int                  Seams;
+
+            public float                StartAt;
+            public int                  SincePaint;
+            public int                  Misses;
             public bool                 Done;
+
+            public int At(int x, int y, int z) => (z * Hgt + y) * Len + x;
+
+            public bool Inside(int x, int y, int z) =>
+                x >= 0 && y >= 0 && z >= 0 && x < Len && y < Hgt && z < Wid;
         }
 
-        /// A limb of ours has just come apart, and the pieces are yet to be claimed.
-        ///
-        /// The pieces are not looked for straight away: a fragment is a limb the game
-        /// has only just built, and its collider is not up for a frame or two, so a
-        /// scan run on the spot finds nothing. Kept for a window instead and re-scanned
-        /// each tick, because one split can drop several pieces and they do not all
-        /// arrive together.
         private sealed class Split
         {
-            public int              Source;    // index into Dose.Limbs of the limb that split
-            public Vector3          Centre;    // taken while the limb was still whole
+            public int              Source;
+            public Vector3          Centre;
             public float            Radius;
-            public HashSet<int>     Before;    // limbs already in that space, so they are not claimed
+            public HashSet<int>     Before;
             public float            DueAt, ExpiresAt;
         }
 
@@ -98,7 +87,7 @@ namespace FruitLab
 
             public Transform    CreatureRoot;
             public Limbs.Graph  Graph;
-            public Infection[]  Limbs;          // indexed alongside Graph.Limbs
+            public Infection[]  Limbs;
             public List<Split>  Splits = new List<Split>();
             public float        Elapsed;
             public float        TickAccum;
@@ -108,9 +97,10 @@ namespace FruitLab
         // Frame loops
         // ══════════════════════════════════════════════════════════════════════════
 
-        /// The rack owns this syringe's toolbar slot; the only thing left to wire up
-        /// is the severing hook, which has to be live before anything is thrown.
-        public static void Register() => Dismemberment.Split += OnLimbSplit;
+        public static void Register()
+        {
+            if (Config.RotEnabled) Dismemberment.Split += OnLimbSplit;
+        }
 
         public static void OnSceneReload() => _live.Clear();
 
@@ -194,7 +184,7 @@ namespace FruitLab
             var cam = Camera.main;
             if (cam == null) return;
 
-            var obj = Props.Spawn("FruitLab_Rot", PropScale, IconColor);
+            var obj = SyringeModel.Spawn("FruitLab_Rot", PropScale, IconColor);
             if (obj == null) return;
 
             Vector3 muzzle = cam.transform.position;
@@ -285,7 +275,8 @@ namespace FruitLab
                 var col = d.Obj.GetComponent<Collider>();
                 if (col != null) col.enabled = true;
 
-                Props.Tint(d.Obj, SpentColor);
+                SyringeModel.Tint(d.Obj, SpentColor);
+                SyringeModel.Plunge(d.Obj, 1f);
                 d.LastPos = d.Obj.transform.position;
             }
 
@@ -302,8 +293,6 @@ namespace FruitLab
         // Spread
         // ══════════════════════════════════════════════════════════════════════════
 
-        /// Infects the limb the needle went into. Everything else is reached from here,
-        /// limb by limb, through the joints.
         private static void Seed(Dose d, Vector3 entry)
         {
             d.CreatureRoot = Limbs.CreatureRootOf(d.HostLer);
@@ -337,31 +326,112 @@ namespace FruitLab
 
             var inf = new Infection
             {
-                Ler       = ler,
-                Mesh      = mesh,
-                Len       = len, Hgt = hgt, Wid = wid,
-                Origin    = origin,
-                StartAt   = startAt,
-                MaxRadius = CornerRadius(origin, len, hgt, wid),
+                Ler     = ler,
+                Mesh    = mesh,
+                Len     = len, Hgt = hgt, Wid = wid,
+                Marked  = new float[len * hgt * wid],
+                Seams   = index,
+                StartAt = startAt,
             };
 
+            for (int i = 0; i < inf.Marked.Length; i++) inf.Marked[i] = -1f;
+
+            if (!Seat(inf, origin, startAt, out Vector3Int seat))
+            {
+                Diag.Log("rot", $"{Diag.Name(ler)} has nothing at {origin} to infect");
+                return null;
+            }
+
             d.Limbs[index] = inf;
+
+            Diag.Log("rot",
+                $"{Diag.Name(ler)} infected — grid {len}x{hgt}x{wid}, took hold at {seat}" +
+                (startAt > 0f ? $", starting at {startAt:0.0}s" : ""));
+
             return inf;
         }
 
-        /// Hands the rot on to whatever this limb is joined to, entering each neighbour at
-        /// the joint they share. That entry point is what makes it read as one continuous
-        /// creep rather than several unrelated patches: the next limb starts rotting at
-        /// the wrist, not at its centre.
-        ///
-        /// Retried every tick rather than fired once. Infecting a neighbour needs its
-        /// voxel grid, and a limb that is busy coming apart at that instant cannot give
-        /// one — a single attempt silently dropped it and everything beyond it, so the rot
-        /// died at whichever joint happened to be detaching as the front arrived. Which is
-        /// exactly where it is most likely to be detaching.
+        private static bool Seat(Infection inf, Vector3Int at, float now, out Vector3Int seat)
+        {
+            seat = at;
+
+            VoxelMesh.Voxels voxels;
+            try { voxels = inf.Mesh.pjw; } catch { return false; }
+
+            for (int r = 0; r <= SeatSearch; r++)
+            {
+                for (int dz = -r; dz <= r; dz++)
+                    for (int dy = -r; dy <= r; dy++)
+                        for (int dx = -r; dx <= r; dx++)
+                        {
+                            if (r > 0 && Mathf.Abs(dx) != r && Mathf.Abs(dy) != r && Mathf.Abs(dz) != r)
+                                continue;
+
+                            int x = at.x + dx, y = at.y + dy, z = at.z + dz;
+                            if (!inf.Inside(x, y, z)) continue;
+
+                            try { if (!voxels[x, y, z].enabled) continue; } catch { continue; }
+
+                            seat = new Vector3Int(x, y, z);
+                            if (!Take(inf, voxels, x, y, z, now)) continue;
+
+                            inf.Edge.Add(seat);
+                            return true;
+                        }
+            }
+
+            return false;
+        }
+
+        private static bool Take(Infection inf, VoxelMesh.Voxels voxels, int x, int y, int z,
+                                 float now)
+        {
+            int i = inf.At(x, y, z);
+            if (inf.Marked[i] >= 0f) return false;
+
+            inf.Marked[i] = now;
+            inf.Rotting.Add(new Vector3Int(x, y, z));
+
+            Limbs.Paint(inf.Mesh, voxels, x, y, z, RotTint);
+
+            if (Config.RotMarkDamage > 0f)
+            {
+                _marked.Clear();
+                _marked.Add(new Vector3Int(x, y, z));
+                Signal(inf, _marked, Config.RotMarkDamage, "rot mark");
+            }
+
+            return true;
+        }
+
+        private static readonly List<Vector3Int> _marked = new List<Vector3Int>();
+
+        // ══════════════════════════════════════════════════════════════════════════
+        // Spread
+        // ══════════════════════════════════════════════════════════════════════════
+
         private static readonly List<int> _neighbours = new List<int>();
 
-        private static void Spread(Dose d, int index)
+        private static void Spread(Dose d, int index, Infection inf)
+        {
+            d.Graph.Neighbours(index, _neighbours);
+
+            foreach (int n in _neighbours)
+            {
+                if (n < 0 || n >= d.Limbs.Length || d.Limbs[n] != null) continue;
+
+                Vector3 junction = d.Graph.Junction(index, n);
+                if (!Limbs.TryVoxelIndex(inf.Mesh, junction, inf.Len, inf.Hgt, inf.Wid,
+                                         out Vector3Int seam))
+                    continue;
+
+                if (!Reached(inf, seam)) continue;
+
+                Infect(d, n, junction, d.Elapsed + Config.RotSpreadSeconds);
+            }
+        }
+
+        private static void OpenSeams(Dose d, int index)
         {
             d.Graph.Neighbours(index, _neighbours);
 
@@ -372,29 +442,61 @@ namespace FruitLab
             }
         }
 
+        private static bool Reached(Infection inf, Vector3Int seam)
+        {
+            int reach = Mathf.Max(Config.RotSeamReach, 1);
+
+            for (int dz = -reach; dz <= reach; dz++)
+                for (int dy = -reach; dy <= reach; dy++)
+                    for (int dx = -reach; dx <= reach; dx++)
+                    {
+                        int x = seam.x + dx, y = seam.y + dy, z = seam.z + dz;
+                        if (!inf.Inside(x, y, z)) continue;
+                        if (inf.Marked[inf.At(x, y, z)] >= 0f) return true;
+                    }
+
+            return false;
+        }
+
+        private static bool Neighbourhood(LimbEffectorReceiver ler, out Vector3 centre,
+                                          out float radius)
+        {
+            centre = default; radius = 0f;
+            try
+            {
+                var col = ler.GetComponentInChildren<Collider>();
+                if (col != null)
+                {
+                    centre = col.bounds.center;
+                    radius = col.bounds.extents.magnitude + 0.3f;
+                }
+                else
+                {
+                    centre = ler.transform.position;
+                    radius = 0.5f;
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private static void ScanLimbs(Vector3 centre, float radius, HashSet<int> ids,
+                                      List<LimbEffectorReceiver> lers)
+        {
+            Limbs.ScanNearby(centre, radius, _scanLers);
+
+            ids.Clear();
+            foreach (var ler in _scanLers) ids.Add(ler.GetInstanceID());
+
+            if (lers == null || ReferenceEquals(lers, _scanLers)) return;
+
+            lers.Clear();
+            lers.AddRange(_scanLers);
+        }
+
         // ══════════════════════════════════════════════════════════════════════════
         // Severed pieces
-        //
-        // Severing a limb does not wound it — it replaces it. The game separates the
-        // voxel mesh and builds a *new* limb for each disconnected group out of the limb
-        // prefab (see Dismemberment), and the separated data carries voxel indexes and
-        // nothing else. So the piece arrives as untouched flesh under a receiver we have
-        // never seen — which is why rot used to stop dead at a severed joint, and why the
-        // limb appeared to heal itself back to healthy pink on its way off the body.
-        //
-        // The piece is the same flesh it was a moment ago, so the rot is handed over
-        // rather than restarted: same origin, same three fronts, and the ground already
-        // covered is repainted onto it.
         // ══════════════════════════════════════════════════════════════════════════
-
-        /// How long after a split to start looking for the pieces, and how long to keep
-        /// looking. A fragment's collider is not up immediately, and one split can drop
-        /// several pieces that do not all arrive on the same frame.
-        private const float ClaimDelay  = 0.15f;
-        private const float ClaimWindow = 1.5f;
-
-        private static readonly HashSet<int>               _scanIds  = new HashSet<int>();
-        private static readonly List<LimbEffectorReceiver> _scanLers = new List<LimbEffectorReceiver>();
 
         private static void OnLimbSplit(LimbEffectorReceiver ler)
         {
@@ -407,8 +509,6 @@ namespace FruitLab
                 int i = d.Graph.IndexOf(ler);
                 if (i < 0 || i >= d.Limbs.Length || d.Limbs[i] == null) continue;
 
-                // Measured now, while the limb is still whole: by the time the pieces are
-                // looked for it may be gone, and there would be nowhere left to look.
                 if (!Neighbourhood(ler, out Vector3 centre, out float radius)) continue;
 
                 var before = new HashSet<int>();
@@ -441,9 +541,10 @@ namespace FruitLab
 
                 foreach (var ler in _scanLers)
                 {
-                    // Anything that was already standing there belongs to somebody else.
                     if (split.Before.Contains(ler.GetInstanceID())) continue;
                     if (d.Graph.IndexOf(ler) >= 0) continue;
+
+                    split.Before.Add(ler.GetInstanceID());
                     Claim(d, split.Source, source, ler);
                 }
             }
@@ -456,129 +557,123 @@ namespace FruitLab
             if (mesh == null) return;
             if (!Limbs.TryGetGrid(mesh, out int len, out int hgt, out int wid)) return;
 
-            Vector3Int origin;
-            float front = 0f, necrosis = 0f, death = 0f;
+            if (len != source.Len || hgt != source.Hgt || wid != source.Wid) return;
 
-            if (len == source.Len && hgt == source.Hgt && wid == source.Wid)
-            {
-                // Same grid, so the piece still indexes its voxels the way the limb it
-                // came off did: the injection point sits at the same coordinate and every
-                // distance already measured still holds. The rot simply carries on.
-                origin   = source.Origin;
-                front    = source.Front;
-                necrosis = source.Necrosis;
-                death    = source.Death;
-            }
-            else
-            {
-                // A differently shaped grid shares no coordinates, so the only honest
-                // common reference is where the injection point is in the world. The
-                // distances cannot come across with it, so the piece rots afresh from the
-                // side the rot arrived on.
-                if (!Limbs.TryIndexToWorld(source.Mesh, source.Origin, out Vector3 world))
-                    world = ler.transform.position;
-                if (!Limbs.TryVoxelIndex(mesh, world, len, hgt, wid, out origin)) return;
-            }
+            int flesh = Limbs.EnabledVoxels(ler);
+            if (flesh >= 0 && flesh <= Config.RotMinPiece) return;
 
             var inf = new Infection
             {
-                Ler       = ler,
-                Mesh      = mesh,
-                Len       = len, Hgt = hgt, Wid = wid,
-                Origin    = origin,
-                StartAt   = d.Elapsed,
-                Front     = front,
-                Necrosis  = necrosis,
-                Death     = death,
-                MaxRadius = CornerRadius(origin, len, hgt, wid),
+                Ler     = ler,
+                Mesh    = mesh,
+                Len     = len, Hgt = hgt, Wid = wid,
+                Marked  = (float[])source.Marked.Clone(),
+                Seams   = source.Seams,
+                StartAt = d.Elapsed,
             };
+
+            VoxelMesh.Voxels voxels;
+            try { voxels = mesh.pjw; } catch { return; }
+
+            float blackenAt = Mathf.Max(Config.RotBlackenAfter, 0f);
+            int carried = 0;
+
+            for (int z = 0; z < wid; z++)
+                for (int y = 0; y < hgt; y++)
+                    for (int x = 0; x < len; x++)
+                    {
+                        float mark = inf.Marked[inf.At(x, y, z)];
+                        if (mark < 0f) continue;
+
+                        try { if (!voxels[x, y, z].enabled) continue; } catch { continue; }
+
+                        var cell = new Vector3Int(x, y, z);
+                        carried++;
+
+                        if (d.Elapsed - mark >= blackenAt)
+                        {
+                            inf.Dying.Add(cell);
+                            Limbs.Paint(mesh, voxels, x, y, z, DeadTint);
+                        }
+                        else
+                        {
+                            inf.Rotting.Add(cell);
+                            Limbs.Paint(mesh, voxels, x, y, z, RotTint);
+                        }
+                    }
+
+            if (carried == 0) return;
+
+            inf.Edge.AddRange(inf.Rotting);
+            inf.Edge.AddRange(inf.Dying);
 
             int index = d.Graph.Append(ler, sourceIndex);
             Array.Resize(ref d.Limbs, d.Graph.Count);
             d.Limbs[index] = inf;
 
-            // The piece came out of the prefab as healthy flesh, so everything the rot
-            // had already crossed has to be put back on it before the fronts move again.
-            if (front > 0f) Backfill(inf);
+            Limbs.RebuildMesh(mesh);
+
+            Diag.Log("rot",
+                $"claimed {Diag.Name(ler)} off {Diag.Name(source.Ler)}, carrying {carried} " +
+                "rotted voxel(s) across");
         }
 
-        /// Repaints the ground the rot has already covered onto a piece that arrived
-        /// clean. Destroys nothing: whatever the death front had reached is not in this
-        /// piece — that flesh is exactly what was taken to sever it in the first place.
-        private static void Backfill(Infection inf)
+        private static void ReportSeams(Dose d, int index, Infection inf)
         {
-            VoxelMesh.Voxels voxels;
-            try { voxels = inf.Mesh.pjw; } catch { return; }
+            if (!Diag.On) return;
 
-            float frontSq = inf.Front    * inf.Front;
-            float necroSq = inf.Necrosis * inf.Necrosis;
-            int   painted = 0;
+            d.Graph.Neighbours(index, _neighbours);
+
+            var mine = d.Graph.Limbs[index];
+            foreach (int n in _neighbours)
+            {
+                if (n < 0 || n >= d.Graph.Count) continue;
+
+                Diag.Collision("rotted through", mine, d.Graph.Limbs[n]);
+
+                if (n < d.Limbs.Length && d.Limbs[n] != null) continue;
+
+                Vector3 junction = d.Graph.Junction(index, n);
+
+                if (!Limbs.TryVoxelIndex(inf.Mesh, junction, inf.Len, inf.Hgt, inf.Wid,
+                                         out Vector3Int seam))
+                {
+                    Diag.Log("rot",
+                        $"seam to {Diag.Name(d.Graph.Limbs[n])} could not be placed in " +
+                        $"{Diag.Name(mine)} at all");
+                    continue;
+                }
+
+                Diag.Log("rot",
+                    $"seam to {Diag.Name(d.Graph.Limbs[n])} sits at {seam} in a " +
+                    $"{inf.Len}x{inf.Hgt}x{inf.Wid} grid; nearest rot got {Nearest(inf, seam)} " +
+                    $"voxel(s) away, and {Marks(inf)} voxel(s) were infected in all");
+            }
+        }
+
+        private static int Nearest(Infection inf, Vector3Int to)
+        {
+            int best = int.MaxValue;
 
             for (int z = 0; z < inf.Wid; z++)
                 for (int y = 0; y < inf.Hgt; y++)
-                {
-                    int dy = y - inf.Origin.y, dz = z - inf.Origin.z;
-                    int yz = dy * dy + dz * dz;
-                    if (yz > frontSq) continue;
-
                     for (int x = 0; x < inf.Len; x++)
                     {
-                        int dx = x - inf.Origin.x;
-                        int d2 = dx * dx + yz;
+                        if (inf.Marked[inf.At(x, y, z)] < 0f) continue;
 
-                        if (d2 <= necroSq)
-                        {
-                            if (Limbs.Paint(inf.Mesh, voxels, x, y, z, DeadTint)) painted++;
-                        }
-                        else if (d2 <= frontSq)
-                        {
-                            if (Limbs.Paint(inf.Mesh, voxels, x, y, z, RotTint)) painted++;
-                        }
+                        int dist = Mathf.Max(Mathf.Abs(x - to.x),
+                                   Mathf.Max(Mathf.Abs(y - to.y), Mathf.Abs(z - to.z)));
+                        if (dist < best) best = dist;
                     }
-                }
 
-            if (painted > 0) Limbs.RebuildMesh(inf.Mesh);
+            return best;
         }
 
-        /// Where to look for the pieces of a limb, and how far out.
-        private static bool Neighbourhood(LimbEffectorReceiver ler, out Vector3 centre,
-                                          out float radius)
+        private static int Marks(Infection inf)
         {
-            centre = default; radius = 0f;
-            try
-            {
-                var col = ler.GetComponentInChildren<Collider>();
-                if (col != null)
-                {
-                    centre = col.bounds.center;
-                    radius = col.bounds.extents.magnitude + 0.3f;
-                }
-                else
-                {
-                    centre = ler.transform.position;
-                    radius = 0.5f;
-                }
-                return true;
-            }
-            catch { return false; }
-        }
-
-        /// The limbs in a piece of space, by instance id as well as by reference —
-        /// the ids are what a before-and-after comparison is made on.
-        private static void ScanLimbs(Vector3 centre, float radius, HashSet<int> ids,
-                                      List<LimbEffectorReceiver> lers)
-        {
-            Limbs.ScanNearby(centre, radius, _scanLers);
-
-            ids.Clear();
-            foreach (var ler in _scanLers) ids.Add(ler.GetInstanceID());
-
-            // _scanLers is the shared scratch list, so a caller that wants to keep the
-            // limbs has to be handed them separately.
-            if (lers == null || ReferenceEquals(lers, _scanLers)) return;
-
-            lers.Clear();
-            lers.AddRange(_scanLers);
+            int n = 0;
+            foreach (float m in inf.Marked) if (m >= 0f) n++;
+            return n;
         }
 
         private static void TickRot(Dose d, float dt)
@@ -605,12 +700,14 @@ namespace FruitLab
                 Advance(d, i, inf);
             }
 
-            // After the limb pass, never during it: claiming a piece appends to the
-            // graph and grows the array being walked.
             if (d.Splits.Count > 0) { ClaimPieces(d); anyAlive = true; }
 
             if (!anyAlive)
             {
+                int reached = 0;
+                foreach (var inf in d.Limbs) if (inf != null) reached++;
+                Diag.Log("rot", $"ran its course after reaching {reached} limb(s)");
+
                 MelonLogger.Msg("[FruitLab] Rot has run its course.");
                 Spend(d);
             }
@@ -618,131 +715,115 @@ namespace FruitLab
 
         private static void Advance(Dose d, int index, Infection inf)
         {
-            float prevFront    = inf.Front;
-            float prevNecrosis = inf.Necrosis;
-            float prevDeath    = inf.Death;
+            float now = d.Elapsed;
 
-            inf.Front    += Mathf.Max(Config.RotWaveSpeed, 0.01f);
-            inf.Necrosis  = Mathf.Max(0f, inf.Front    - Mathf.Max(Config.RotNecrosisLag, 0f));
-            inf.Death     = Mathf.Max(0f, inf.Necrosis - Mathf.Max(Config.RotDeathLag, 0f));
-
-            Consume(inf, prevFront, prevNecrosis, prevDeath);
-
-            // Once the discolouration has crossed enough of the limb, the rot is in the
-            // joints and the neighbours are next. Seeding on the *leading* front, not on
-            // completion, is what keeps it moving as one wave instead of stopping at
-            // every border. Spread skips neighbours it has already taken, so calling it
-            // every tick simply keeps trying the ones it could not.
-            if (inf.Front >= inf.MaxRadius * Config.RotSpreadAt) Spread(d, index);
-
-            if (inf.Death >= inf.MaxRadius) inf.Done = true;
-        }
-
-        /// One pass over the limb's grid covering all three fronts.
-        ///
-        /// Blackening and destruction used to share a shell, so a voxel was painted black
-        /// and switched off in the same tick and the black was never once drawn — the
-        /// tissue went straight from purple to absent. (Healing a rotted body proved the
-        /// paint had landed: the flesh grew back black.) They are separate bands now, and
-        /// RotDeathLag is how long dead tissue is left standing before it goes.
-        private static void Consume(Infection inf, float prevFront, float prevNecrosis,
-                                    float prevDeath)
-        {
-            // A detaching limb hands out a mesh that is briefly unreadable, and it used to
-            // be written off on the first failure — so rot reliably died at the very joint
-            // it had just eaten through. Re-resolve and keep trying for a while first.
             VoxelMesh.Voxels voxels;
             try { voxels = inf.Mesh.pjw; }
             catch
             {
                 inf.Mesh = Limbs.MeshOf(inf.Ler);
                 if (inf.Mesh == null || ++inf.Misses > MaxMeshMisses) inf.Done = true;
-                else if (Limbs.TryGetGrid(inf.Mesh, out int len, out int hgt, out int wid))
-                {
-                    // A replacement mesh need not be the grid we measured against.
-                    inf.Len = len; inf.Hgt = hgt; inf.Wid = wid;
-                    inf.Origin = new Vector3Int(Math.Clamp(inf.Origin.x, 0, len - 1),
-                                                Math.Clamp(inf.Origin.y, 0, hgt - 1),
-                                                Math.Clamp(inf.Origin.z, 0, wid - 1));
-                }
                 return;
             }
             inf.Misses = 0;
 
-            float frontSq = inf.Front    * inf.Front,    prevFrontSq = prevFront    * prevFront;
-            float necroSq = inf.Necrosis * inf.Necrosis, prevNecroSq = prevNecrosis * prevNecrosis;
-            float deathSq = inf.Death    * inf.Death,    prevDeathSq = prevDeath    * prevDeath;
+            int painted = Creep(inf, voxels, now);
+            painted += Blacken(inf, voxels, now);
 
-            var doomed  = new List<Vector3Int>();
-            var marked  = new List<Vector3Int>();
-            int painted = 0;
-
-            for (int z = 0; z < inf.Wid; z++)
-                for (int y = 0; y < inf.Hgt; y++)
-                {
-                    int dy = y - inf.Origin.y, dz = z - inf.Origin.z;
-                    int yz = dy * dy + dz * dz;
-                    if (yz > frontSq) continue;
-
-                    for (int x = 0; x < inf.Len; x++)
-                    {
-                        int dx = x - inf.Origin.x;
-                        int d2 = dx * dx + yz;
-
-                        // Innermost band first: the three are disjoint, so each voxel is
-                        // discoloured, then blackened, then taken, one band per pass.
-                        if (d2 <= deathSq && d2 > prevDeathSq)
-                            doomed.Add(new Vector3Int(x, y, z));
-                        else if (d2 <= necroSq && d2 > prevNecroSq)
-                        {
-                            if (Limbs.Paint(inf.Mesh, voxels, x, y, z, DeadTint)) painted++;
-                        }
-                        else if (d2 <= frontSq && d2 > prevFrontSq)
-                        {
-                            if (Limbs.Paint(inf.Mesh, voxels, x, y, z, RotTint)) painted++;
-
-                            // A scattering of the discoloured front is taken outright.
-                            // Colour alone is invisible: the mesh only re-meshes a chunk
-                            // whose topology changed, so painted-but-intact flesh keeps
-                            // its old surface until something near it is destroyed — which
-                            // is why the rot read as nothing, nothing, nothing, gone. The
-                            // pits force those updates, and pitting is what rotting flesh
-                            // does anyway.
-                            if (Pitted(x, y, z)) doomed.Add(new Vector3Int(x, y, z));
-                            else if (Config.RotMarkDamage > 0f) marked.Add(new Vector3Int(x, y, z));
-                        }
-                    }
-                }
-
-            // The rebuild is what makes the paint visible, and there is no substitute.
-            //
-            // It was removed once on the theory that destroying a voxel would make the
-            // game re-mesh that chunk and pick the colours up for free. It does re-mesh —
-            // but from its own changed-data map, which only contains voxels the game
-            // itself altered, so our painted neighbours are never in it. Removing this
-            // cost the colour entirely and fixed nothing it was blamed for.
-            //
-            // Throttled because a rebuild is whole-limb: doing it every tick of every
-            // rotting limb is the expensive part of the effect rather than the effect.
             if (painted > 0 && ++inf.SincePaint >= RebuildEvery)
             {
                 inf.SincePaint = 0;
                 Limbs.RebuildMesh(inf.Mesh);
             }
 
-            // Two signal batches, deliberately different in kind.
-            //
-            // The leading front only *marks* tissue: a token amount that registers the rot
-            // in the organs' effector collectors without taking anything, so the body is
-            // already dying of it while the flesh is still standing. Turn RotMarkDamage up
-            // and the creature will feel the rot spreading rather than only its aftermath.
-            Signal(inf, marked, Config.RotMarkDamage, "rot mark");
-            Signal(inf, doomed, Config.RotDamage,     "rot");
+            Reap(inf, now);
+            Spread(d, inf.Seams, inf);
+
+            if (!inf.Done && inf.Edge.Count == 0 && inf.Rotting.Count == 0 && inf.Dying.Count == 0)
+            {
+                inf.Done = true;
+                Diag.Log("rot", $"{Diag.Name(inf.Ler)} is spent");
+
+                OpenSeams(d, inf.Seams);
+
+                ReportSeams(d, inf.Seams, inf);
+            }
         }
 
-        /// Destruction goes through the game's own damage path rather than simply
-        /// switching voxels off, so the body bleeds from it, comes apart at the seams it
-        /// should, and dies of the rot properly.
+        private static readonly List<Vector3Int> _grown = new List<Vector3Int>();
+
+        private static int Creep(Infection inf, VoxelMesh.Voxels voxels, float now)
+        {
+            if (inf.Edge.Count == 0) return 0;
+
+            _grown.Clear();
+            int before = inf.Rotting.Count;
+
+            foreach (var cell in inf.Edge)
+            {
+                for (int face = 0; face < 6; face++)
+                {
+                    int x = cell.x + (face == 0 ? 1 : face == 1 ? -1 : 0);
+                    int y = cell.y + (face == 2 ? 1 : face == 3 ? -1 : 0);
+                    int z = cell.z + (face == 4 ? 1 : face == 5 ? -1 : 0);
+
+                    if (!inf.Inside(x, y, z)) continue;
+                    if (inf.Marked[inf.At(x, y, z)] >= 0f) continue;
+
+                    bool alive;
+                    try { alive = voxels[x, y, z].enabled; } catch { continue; }
+                    if (!alive) continue;
+
+                    if (Take(inf, voxels, x, y, z, now)) _grown.Add(new Vector3Int(x, y, z));
+                }
+            }
+
+            inf.Edge.Clear();
+            inf.Edge.AddRange(_grown);
+
+            return inf.Rotting.Count - before;
+        }
+
+        private static int Blacken(Infection inf, VoxelMesh.Voxels voxels, float now)
+        {
+            float after = Mathf.Max(Config.RotBlackenAfter, 0f);
+            int painted = 0;
+
+            for (int i = inf.Rotting.Count - 1; i >= 0; i--)
+            {
+                var cell = inf.Rotting[i];
+                if (now - inf.Marked[inf.At(cell.x, cell.y, cell.z)] < after) continue;
+
+                if (Limbs.Paint(inf.Mesh, voxels, cell.x, cell.y, cell.z, DeadTint)) painted++;
+
+                inf.Rotting.RemoveAt(i);
+                inf.Dying.Add(cell);
+            }
+
+            return painted;
+        }
+
+        private static readonly List<Vector3Int> _doomed = new List<Vector3Int>();
+
+        private static void Reap(Infection inf, float now)
+        {
+            float after = Mathf.Max(Config.RotBlackenAfter, 0f)
+                        + Mathf.Max(Config.RotDestroyAfter, 0f);
+
+            _doomed.Clear();
+
+            for (int i = inf.Dying.Count - 1; i >= 0; i--)
+            {
+                var cell = inf.Dying[i];
+                if (now - inf.Marked[inf.At(cell.x, cell.y, cell.z)] < after) continue;
+
+                _doomed.Add(cell);
+                inf.Dying.RemoveAt(i);
+            }
+
+            Signal(inf, _doomed, Config.RotDamage, "rot");
+        }
+
         private static void Signal(Infection inf, List<Vector3Int> voxels, float amount,
                                    string label)
         {
@@ -760,24 +841,5 @@ namespace FruitLab
             finally { batch.Dispose(); }
         }
 
-        /// Whether this voxel is one of the pits. Hashed from the coordinate rather than
-        /// drawn at random so a given voxel is always either a pit or not — a coin toss
-        /// per tick would make the front shimmer as it re-evaluated the same flesh.
-        private static bool Pitted(int x, int y, int z)
-        {
-            int pct = Mathf.Clamp(Mathf.RoundToInt(Config.RotPitting), 0, 100);
-            if (pct <= 0) return false;
-
-            int h = (x * 73856093) ^ (y * 19349663) ^ (z * 83492791);
-            return ((h & 0x7FFFFFFF) % 100) < pct;
-        }
-
-        private static float CornerRadius(Vector3Int o, int len, int hgt, int wid)
-        {
-            int dx = Math.Max(o.x, len - 1 - o.x);
-            int dy = Math.Max(o.y, hgt - 1 - o.y);
-            int dz = Math.Max(o.z, wid - 1 - o.z);
-            return Mathf.Sqrt(dx * dx + dy * dy + dz * dz);
-        }
     }
 }

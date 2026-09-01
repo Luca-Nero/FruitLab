@@ -5,12 +5,11 @@ using MelonLoader;
 namespace FruitLab
 {
     // ── FruitLib dependency gate ──────────────────────────────────────────────
- 
+
     internal static class FruitGate
     {
         private const string LibName = "FruitLib";
 
-        /// <summary>Why <see cref="Check"/> failed; used as the unregister reason.</summary>
         public static string FailureReason { get; private set; }
 
         public static bool Check(string modName, int major, int minor, int patch)
@@ -47,12 +46,11 @@ namespace FruitLab
                     if (string.Equals(a.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
                         return a;
                 }
-                catch { /* dynamic or half-loaded assembly — skip it */ }
+                catch {  }
             }
             return null;
         }
 
-        // Reaches FruitVersion by name only, never as a typeref.
         private static string ReadVersion(Assembly lib)
         {
             try

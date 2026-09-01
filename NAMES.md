@@ -91,6 +91,35 @@ djj -> PositionToVoxelIndexUnclamped(pos, rot, scale, p, round)
 djk -> GetVoxelSizeOffset
 ```
 
+### `VoxelMesh` — making a colour change visible
+```
+dgq -> CreateMesh(Voxels, Vector3 displacement, bool containsInitialEnabledVoxels)
+dgr -> StartStepwiseMeshChanging(int)     dgs -> WriteStepwiseMeshChange(VoxelMorphData)
+dgt -> CompleteStepwiseMeshChanging(int)  dgv -> Hide()        dgw -> Show()
+dgx -> CheckoutUpdateChunkRequest(Action onComplete)
+dgy -> CheckoutUpdateChunkRequest(MutantDictionary<int3, Voxel>, int,
+                                  Action<…CallbackData>, Action<…CallbackData>)
+dgz -> RegisterUpdateChunkRequest(UpdateChunksRequest)   dha -> IterateUpdateRequestsQueue()
+```
+Positional against v0.14's declaration order, with `dgq`, `dgr`, `dgt`, `dgy` and
+`dgz` all confirmed on signature — `dgy`'s four-argument shape pins the Checkout
+pair, and `er` = `UpdateChunksRequest` pins `dgz`.
+
+**`dgx` is what you want, not `dgq`.** `dgq` is not a re-mesh, it is a *build*: it
+recreates the chunk set and re-adds every chunk to a dictionary that already holds
+them, which is the long-standing duplicate-key `ArgumentException` on
+`int3(0, 0, 0)`. It happened to work only because the geometry updates before the
+throw. `dgx` queues an update request the way the game does.
+
+**Correction:** an earlier note here identified `dhh` as `Show`. It is not — `dgw`
+is `Show`. `dhh` is the private chunk-creation step *inside* `dgq`, which is why
+it appears above `dgq` in the stack trace of that exception, and why the key it
+duplicates is a chunk index.
+
+Consequence worth knowing: with a real update path available, painting no longer
+depends on destroying a voxel nearby to force a re-mesh. That constraint is what
+the rot syringe's "pitting" existed to work around.
+
 ### Limb ownership is not node membership
 A limb can sit in the correct slot of the correct creature's node hierarchy and
 still belong to a creature of its own. Severing gives it one (see the
@@ -139,10 +168,20 @@ that method is for: making a node the new root of a hierarchy.
 So the rule is: **whichever half holds the mind must be the target, not the thing
 you carry.**
 
-Same reason headshots stop mattering on such a body: cognition is high *because*
-the brain is absent, not despite it — the input that would drag it down is not
-zero, it is missing, and the dependency graph is built at construction. Blood is
-wired in (`bbi` sits in the creature's inputs), which is why bleed-out still kills.
+**Correction.** An earlier note here claimed cognition reads high on a headless
+body *because* the brain is absent. That is wrong: observed directly on the Vitals
+Monitor, a decapitated body reads `bbj` 0% and DECEASED. Cognition does track the
+head.
+
+What is still true is narrower and still unexplained: during the suture work,
+`bbj` read 94–95% on a body that had been headless for a minute, both before and
+after a head was sewn on. Something about that measurement or that body differed —
+possibly the creature being read, possibly prior healing — and it was never run
+down. Treat `bbj` as a real consciousness readout; treat the suture-time reads as
+unexplained rather than as evidence about how cognition works.
+
+Headshots not mattering on a body with a *reattached* head is therefore a gap in
+what reattachment wires up, not a general property of cognition.
 
 #### `bcl` — `IParentCoresSetter` (this is where ownership lives)
 Reached as `zk.xkc` (`LimbReferencesPublic.ParentCoresSetter`). An interface, so no

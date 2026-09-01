@@ -11,9 +11,9 @@
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
 
+  <!-- Globbed rather than listed: a new part is a converter run, not a csproj edit. -->
   <ItemGroup>
-    <Folder Include="Items\Syringes\" />
-    <Folder Include="Models\" />
+    <EmbeddedResource Include="Models\*_mesh.json" />
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(CI)' != 'true'">

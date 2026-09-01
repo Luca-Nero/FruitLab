@@ -1,5 +1,6 @@
 using Il2Cpp;
 using Il2CppEffectors;
+using Il2CppLVA.Organs.EffectorsPerception.Collectors;
 using MelonLoader;
 using System;
 using System.Collections.Generic;
@@ -9,19 +10,12 @@ namespace FruitLab
 {
     // ══════════════════════════════════════════════════════════════════════════════
     // Lazarus Syringe — a self-contained FruitLab item.
-    //
-    // Does what it says on the tin: keeps the body alive, and nothing else. It never
-    // touches voxels, so wounds stay open and limbs stay off — it just holds the
-    // creature's LVA vitals at their spawn values for as long as its charge lasts.
-    //
-    // The Healing Syringe restores voxels but not blood, so a body healed of every
-    // wound still eventually runs out of blood to run on. This is the other half.
     // ══════════════════════════════════════════════════════════════════════════════
     internal static class LazarusSyringe
     {
         public const string DisplayName = "Lazarus Syringe";
 
-        public  static readonly Color IconColor  = new Color(1f, 0.78f, 0.29f, 1f);   // amber
+        public  static readonly Color IconColor  = new Color(1f, 0.78f, 0.29f, 1f);
         private static readonly Color SpentColor = new Color(0.36f, 0.31f, 0.22f, 1f);
         private static readonly Vector3 PropScale = new Vector3(0.015f, 0.015f, 0.12f);
 
@@ -32,7 +26,6 @@ namespace FruitLab
             public GameObject Obj;
             public Rigidbody  Rb;
 
-            // Stick
             public bool                 Stuck;
             public Rigidbody            HostRb;
             public LimbEffectorReceiver HostLer;
@@ -40,13 +33,11 @@ namespace FruitLab
             public Quaternion           LocalRotation;
             public Vector3              LastPos;
 
-            // Charge
             public bool  Spent;
             public float SpentFor;
-            public float Remaining;          // seconds of sustain left
+            public float Remaining;
             public bool  Faulted;
 
-            // Sustain
             public Transform            CreatureRoot;
             public List<Vitals.Handle>  Handles = new List<Vitals.Handle>();
             public float                Accum;
@@ -57,6 +48,21 @@ namespace FruitLab
         // ══════════════════════════════════════════════════════════════════════════
         // Frame loops
         // ══════════════════════════════════════════════════════════════════════════
+
+        public static float SustainOn(Transform creatureRoot)
+        {
+            if (creatureRoot == null) return 0f;
+
+            float most = 0f;
+
+            foreach (var d in _live)
+            {
+                if (!d.Frozen || d.CreatureRoot != creatureRoot) continue;
+                if (d.Remaining > most) most = d.Remaining;
+            }
+
+            return most;
+        }
 
         public static void OnSceneReload()
         {
@@ -123,14 +129,41 @@ namespace FruitLab
             }
         }
 
-        /// Hands this dose's parameters back to the solver. Safe to call twice; every
-        /// path that drops a dose goes through it, because a hold left behind would
-        /// pin a creature's vitals for the rest of the session.
+        private const float WakeSignal = 1f;
+
         private static void Release(Dose d)
         {
             if (!d.Frozen) return;
             d.Frozen = false;
             try { Vitals.Unfreeze(d.Handles); } catch { }
+
+            Wake(d);
+        }
+
+        private static void Wake(Dose d)
+        {
+            if (d.HostLer == null) return;
+
+            try
+            {
+                var shape = Limbs.ShapeOf(d.HostLer);
+                var mesh  = Limbs.MeshOf(d.HostLer);
+                if (mesh == null || shape == null) return;
+                if (!Limbs.TryGetGrid(mesh, out int len, out int hgt, out int wid)) return;
+
+                var batch = Limbs.NewBatch(1);
+                try
+                {
+                    Limbs.Add(batch, len / 2, hgt / 2, wid / 2, -WakeSignal,
+                              InfluenceProcessType.Sum);
+                    Limbs.Send(d.HostLer, batch, "lazarus release");
+                }
+                finally { batch.Dispose(); }
+            }
+            catch (Exception e)
+            {
+                MelonLogger.Warning($"[FruitLab] Could not wake the patient: {e.Message}");
+            }
         }
 
         private static void Fault(Dose d, Exception e)
@@ -157,7 +190,7 @@ namespace FruitLab
             var cam = Camera.main;
             if (cam == null) return;
 
-            var obj = Props.Spawn("FruitLab_Lazarus", PropScale, IconColor);
+            var obj = SyringeModel.Spawn("FruitLab_Lazarus", PropScale, IconColor);
             if (obj == null) return;
 
             Vector3 muzzle = cam.transform.position;
@@ -244,14 +277,13 @@ namespace FruitLab
 
             if (d.Obj != null)
             {
-                // Back the needle out before the collider comes back, or depenetration
-                // flings it — half its length is inside the limb it entered.
                 d.Obj.transform.position -= d.Obj.transform.forward * 0.07f;
 
                 var col = d.Obj.GetComponent<Collider>();
                 if (col != null) col.enabled = true;
 
-                Props.Tint(d.Obj, SpentColor);
+                SyringeModel.Tint(d.Obj, SpentColor);
+                SyringeModel.Plunge(d.Obj, 1f);
                 d.LastPos = d.Obj.transform.position;
             }
 
@@ -268,9 +300,6 @@ namespace FruitLab
         // Sustain
         // ══════════════════════════════════════════════════════════════════════════
 
-        /// Collects every parameter the dose will hold up: the creature's own, plus
-        /// each limb's. Done once on impact — the set does not change while the dose
-        /// runs, and walking the creature every tick would be wasteful.
         private static void BindVitals(Dose d)
         {
             d.Handles.Clear();
@@ -291,30 +320,31 @@ namespace FruitLab
             if (d.Handles.Count == 0)
             {
                 MelonLogger.Warning(
-                    $"[FruitLab] Lazarus stuck to {root.name} but found no vitals to hold.");
+                    $"[FruitLab] Lazarus stuck to {Patients.NameFor(root)} " +
+                    "but found no vitals to hold.");
                 return;
             }
 
             if (Config.LogVitals) { Vitals.Dump("on impact", d.Handles); d.Dumped = true; }
 
-            // Pin them, rather than re-asserting on a cadence. The solver keeps
-            // computing "dead" from the destroyed organs; letting it write that
-            // between our writes is what made the body convulse.
             Vitals.Freeze(d.Handles);
             d.Frozen = true;
 
-            // A dose stands a dead body up, and a dead body has had its feet switched to
-            // a frictionless material. Without this it stands there skating.
             Puppeteer.RestoreFootFriction(root);
 
             MelonLogger.Msg(
-                $"[FruitLab] Lazarus holding {d.Handles.Count} vital(s) on {root.name} " +
+                $"[FruitLab] Lazarus holding {d.Handles.Count} vital(s) " +
+                $"on {Patients.NameFor(root)} " +
                 $"for {Config.LazarusDuration:0.#}s.");
         }
 
         private static void TickSustain(Dose d, float dt)
         {
             d.Remaining -= dt;
+
+            float span = Mathf.Max(Config.LazarusDuration, 0.05f);
+            SyringeModel.Plunge(d.Obj, 1f - d.Remaining / span);
+
             if (d.Remaining <= 0f)
             {
                 if (Config.LogVitals && d.Dumped) Vitals.Dump("dose expired", d.Handles);
@@ -330,9 +360,6 @@ namespace FruitLab
             if (d.Accum < interval) return;
             d.Accum = 0f;
 
-            // The dependency solver recomputes these from organ state, so a restore
-            // does not stick — holding the body up means re-applying, which is what
-            // "for the duration of the syringe" buys.
             Vitals.RestoreAll(d.Handles);
         }
 
@@ -340,8 +367,6 @@ namespace FruitLab
         // Organ teardown hold — read by PatchOrganDestroyLVA via Items
         // ══════════════════════════════════════════════════════════════════════════
 
-        /// A Lazarus dose is the one thing in the mod that most needs organs kept
-        /// alive: it is explicitly refusing to let the creature die.
         public static bool AnyPassRunning
         {
             get

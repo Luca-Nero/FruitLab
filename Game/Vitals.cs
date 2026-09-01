@@ -9,46 +9,13 @@ using UnityEngine;
 
 namespace FruitLab
 {
-    /// <summary>
-    /// Shared access to the LVA parameters that decide whether a creature can still
-    /// function — blood, cognition, muscle force, pain — separate from
-    /// <see cref="Limbs"/>, which deals in voxels and damage signals.
-    ///
-    /// Restoring targets each parameter's <b>MaxValue</b>.
-    ///
-    /// It targeted <c>initialValue</c> first, on the theory that it held the spawn
-    /// state. It does not — measured in-game, it is the value the LimitedValue was
-    /// constructed with, which is 0 for most parameters; LVA raises them to their max
-    /// while the creature initialises. Restoring to it wrote zero into everything and
-    /// killed the body outright. On a pristine creature every parameter in this build
-    /// sits at max, so max is what "alive" means here.
-    ///
-    /// That does assume no parameter in the set is pain-like, where max would be the
-    /// bad end. None is in v0.1. If a later version adds one, this is where it breaks,
-    /// and LogVitals on a healthy creature is how you would spot it — anything not
-    /// sitting near its max when the body is fine does not belong here.
-    ///
-    /// The dependency solver owns these values and recomputes them from organ state.
-    /// While the organs are intact it agrees that the creature is alive and a restore
-    /// simply holds; once they are destroyed it keeps computing "dead" and drags the
-    /// values back down, and re-applying on a cadence turns into an arm-wrestle at the
-    /// tick rate. In-game that reads as the body convulsing between alive and dead
-    /// several times a second.
-    ///
-    /// So vitals are <b>frozen</b> rather than re-applied: pinned once to their max,
-    /// then held there by blocking every other write to them (see
-    /// <see cref="PatchLimitedValueSetValue"/>). Nothing is left to oscillate against.
-    /// </summary>
     internal static class Vitals
     {
-        /// One restorable parameter, already resolved to its LimitedValue base.
-        /// <see cref="Key"/> is the parameter's own type name, which is what
-        /// identifies it across creatures; <see cref="Label"/> also carries the owner.
         internal readonly struct Handle
         {
             public readonly bjq    Param;
-            public readonly string Key;     // parameter type name
-            public readonly string Owner;   // creature, or the limb it belongs to
+            public readonly string Key;
+            public readonly string Owner;
 
             public Handle(bjq param, string key, string owner)
             {
@@ -66,16 +33,6 @@ namespace FruitLab
 
         // ── Collection ────────────────────────────────────────────────────────
 
-        /// Every internal parameter on one LVA entity, walked straight out of the
-        /// module's dictionary.
-        ///
-        /// The public parameters API was the obvious route and does not work: its
-        /// lookups are generic methods on an IL2CPP interface, and generic-instance
-        /// virtual dispatch through one silently resolves nothing here — it returned
-        /// empty for all 34 parameters of a creature that plainly had them, in every
-        /// state tested. The dictionary needs no generic dispatch, no cast back from
-        /// a readonly wrapper, and no hardcoded list of parameter types, so it also
-        /// picks up the extra parameters later game versions added for free.
         public static int Collect(bcx entity, string prefix, List<Handle> into)
         {
             if (entity == null) return 0;
@@ -100,9 +57,6 @@ namespace FruitLab
                     bdb param = kv.Value;
                     if (param == null) continue;
 
-                    // A parameter derives from LimitedValue in v0.1, so it already is
-                    // the value object — no cast needed. The key is the parameter's
-                    // own Type, which makes a far better label than a guessed name.
                     string name;
                     try { name = kv.Key != null ? kv.Key.Name : "?"; } catch { name = "?"; }
 
@@ -115,8 +69,6 @@ namespace FruitLab
                 MelonLogger.Warning($"[FruitLab] vitals walk failed on {prefix}: {ex.Message}");
             }
 
-            // Report the dictionary's own count when nothing came out, so an empty
-            // module is distinguishable from a walk that could not read a full one.
             if (found == 0)
             {
                 int size = -1;
@@ -127,21 +79,15 @@ namespace FruitLab
             return found;
         }
 
-        /// The creature's own parameters — blood, and whatever else sits at
-        /// creature level.
         public static int CollectCreature(bcx creature, List<Handle> into) =>
             Collect(creature, "creature", into);
 
-        /// One limb's parameters. These drive muscle force, so a body with full
-        /// blood and dead limb parameters still will not move.
         public static int CollectLimb(LimbEffectorReceiver ler, List<Handle> into)
         {
             var entity = LimbEntityOf(ler, out string label);
             return entity == null ? 0 : Collect(entity, label, into);
         }
 
-        /// The entity's *external* parameters — what the solver reads rather than what
-        /// it writes. Restoring these is what makes a change outlive the next solve.
         public static int CollectExternal(bcx entity, string prefix, List<Handle> into)
         {
             if (entity == null) return 0;
@@ -190,17 +136,9 @@ namespace FruitLab
             return entity == null ? 0 : CollectExternal(entity, label, into);
         }
 
-        /// Every organ on a creature, walked the same way. Organs are the layer under
-        /// the limbs — integrity, efficiency, backbone conduction — and unlike limbs and
-        /// creatures they are MonoBehaviours, so they can be found by component.
-        ///
-        /// Worth having because limb `zr` has no external parameter of its own: whatever
-        /// drives it lives down here.
         public static int CollectOrgans(Transform creatureRoot, List<Handle> into) =>
             CollectOrgans(creatureRoot, into, null);
 
-        /// <paramref name="externals"/> is optional; pass one to gather the organs'
-        /// inputs in the same walk rather than enumerating every organ twice.
         public static int CollectOrgans(Transform creatureRoot, List<Handle> into,
                                         List<Handle> externals)
         {
@@ -234,14 +172,6 @@ namespace FruitLab
 
         // ── Restore ───────────────────────────────────────────────────────────
 
-        /// Pushes one parameter back up to its maximum, but only if it has actually
-        /// sagged. The check is a plain field read while the write fires a full
-        /// dependency solve, so skipping no-op writes is most of the cost saved on a
-        /// body that is holding steady.
-        ///
-        /// The deadband is relative because the parameters are on wildly different
-        /// scales — limb values run 0–100, blood runs 0–5146 — and a healthy value
-        /// hovers a hair under max rather than sitting exactly on it.
         public static bool Restore(in Handle h)
         {
             if (!h.Valid) return false;
@@ -258,23 +188,6 @@ namespace FruitLab
             catch { return false; }
         }
 
-        /// Posture, not health.
-        ///
-        /// Established by lifting a *pristine* ragdoll off the ground and reading it:
-        /// muscle 5%, balance 0%, limb zr 5%, limb xr 22%, rh 0%, ri 5%, xq 22%. An
-        /// undamaged body dangling in the air reports exactly the figures we had been
-        /// treating as catastrophic injury, because they describe how it is carrying
-        /// itself — ground contact, muscle tension, poise — and a body in mid-air is
-        /// carrying itself not at all.
-        ///
-        /// Nothing here is ever "restored". There is no correct value to write: it
-        /// depends entirely on what the body is doing this instant, and the puppeteer
-        /// rewrites it continuously. Forcing them to max was writing nonsense, and it is
-        /// why a healed body used to read 100% on values a healthy one never reaches
-        /// unless it happens to be standing squarely on both feet.
-        ///
-        /// Lazarus deliberately still freezes them — overriding posture is exactly how it
-        /// holds a ruined body upright.
         private static readonly string[] Posture =
             { "rh", "ri", "xq", "bbk", "bbh", "xr", "zr" };
 
@@ -284,9 +197,6 @@ namespace FruitLab
             return false;
         }
 
-        /// Restores a whole set, returning how many actually needed writing. With the
-        /// set frozen this is a no-op; it stays as the fallback for a build where the
-        /// freeze patch did not take, where it degrades to the old re-apply behaviour.
         public static int RestoreAll(List<Handle> handles, bool skipPosture = false)
         {
             _selfWriting = true;
@@ -305,16 +215,11 @@ namespace FruitLab
 
         // ── Freeze ────────────────────────────────────────────────────────────
 
-        /// Parameters currently pinned, by native pointer — wrapper references are
-        /// not identity here, the same native object can arrive as different managed
-        /// wrappers. Refcounted so two doses on one creature do not release each
-        /// other's hold.
         private static readonly Dictionary<IntPtr, int> _frozen = new Dictionary<IntPtr, int>();
         private static bool _selfWriting;
 
         public static bool AnyFrozen => _frozen.Count > 0;
 
-        /// Pins each parameter at its maximum and holds it there.
         public static void Freeze(List<Handle> handles)
         {
             _selfWriting = true;
@@ -336,7 +241,6 @@ namespace FruitLab
             finally { _selfWriting = false; }
         }
 
-        /// Hands the parameters back to the solver.
         public static void Unfreeze(List<Handle> handles)
         {
             foreach (var h in handles)
@@ -352,16 +256,8 @@ namespace FruitLab
             }
         }
 
-        /// Scene changes destroy every creature we were holding, so the whole ledger
-        /// goes with them — a stale entry would pin a parameter on a fresh creature
-        /// that happened to land on the same address.
         public static void UnfreezeAll() => _frozen.Clear();
 
-        /// True when this write should be refused. Kept as cheap as possible: it sits
-        /// on a method the game calls constantly, so the common case is one int
-        /// compare against an empty ledger.
-        /// Whether this parameter is currently pinned by a Lazarus dose. The monitor
-        /// shows it, which makes "held" visible instead of something you infer.
         internal static bool IsFrozen(bjq value)
         {
             if (_frozen.Count == 0 || value == null) return false;
@@ -378,9 +274,6 @@ namespace FruitLab
 
         // ── Diagnostics ───────────────────────────────────────────────────────
 
-        /// Dumps value / initial / min / max for a set. Off by default; turn on
-        /// LogVitals when a creature will not stay alive and you need to see which
-        /// parameter the solver is dragging back down.
         public static void Dump(string header, List<Handle> handles)
         {
             MelonLogger.Msg($"[FruitLab] vitals — {header} ({handles.Count} parameter(s))");
@@ -399,16 +292,6 @@ namespace FruitLab
         }
     }
 
-    /// <summary>
-    /// Refuses writes to a frozen parameter. <c>bjq.jdl</c> is
-    /// <c>LimitedValue.SetValue</c> — proven at runtime, not just by name matching:
-    /// writing through it visibly collapsed a creature when FruitLab briefly targeted
-    /// the wrong value.
-    ///
-    /// Blocking it is what makes a Lazarus dose an override rather than a tug of war.
-    /// The solver still runs and still decides the creature is dead; it just cannot
-    /// write that conclusion anywhere.
-    /// </summary>
     [HarmonyPatch(typeof(bjq), nameof(bjq.jdl))]
     internal static class PatchLimitedValueSetValue
     {

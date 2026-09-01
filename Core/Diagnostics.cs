@@ -6,20 +6,6 @@ using UnityEngine;
 
 namespace FruitLab
 {
-    /// <summary>
-    /// Runtime instrumentation, so a report can say *what happened* instead of what it
-    /// looked like.
-    ///
-    /// The centrepiece is the voxel watch. Destroyed voxels are the one damage readout
-    /// this game hands over cheaply — <c>DisabledVoxelsCount</c>, a plain int per limb —
-    /// so counting them before and after each step of an operation says exactly which
-    /// step destroyed flesh, and in which limb. Sampling once a frame would only narrow
-    /// it to the frame, and a suture does everything it does inside one; <see cref="Sample"/>
-    /// is therefore called *between* steps, synchronously, and the log reads as a
-    /// sequence rather than a snapshot.
-    ///
-    /// Everything here is behind <c>LogDiagnostics</c> and costs a bool read when off.
-    /// </summary>
     internal static class Diag
     {
         public static bool On => Config.LogDiagnostics;
@@ -30,8 +16,6 @@ namespace FruitLab
             MelonLogger.Msg($"[FruitLab:{channel}] f{Time.frameCount} {Time.time:0.000}  {message}");
         }
 
-        /// The limb prefab's name. The receiver lives on a "Physics" child, so its own
-        /// name says nothing — the parent is the one that reads as "LeftLegPrefab".
         public static string Name(LimbEffectorReceiver ler)
         {
             if (ler == null) return "<none>";
@@ -43,8 +27,6 @@ namespace FruitLab
             catch { return "<gone>"; }
         }
 
-        /// A rigidbody's limb, by the same naming. Rigidbodies sit on the "Physics"
-        /// node, so their own names are all identical and say nothing.
         public static string Name(Rigidbody rb)
         {
             if (rb == null) return "the world";
@@ -69,12 +51,6 @@ namespace FruitLab
 
         // ── Limb wiring ───────────────────────────────────────────────────────
 
-        /// What a limb is currently attached to, and whether anything is animating it.
-        ///
-        /// The puppeteer readout is the one that matters for a suture: a limb with no
-        /// puppeteer hangs, however well it is bolted on, because nothing is driving
-        /// its muscles. Logged either side of the graft, that says whether the attach
-        /// protocol reached the listeners or only moved the node.
         public static void Wiring(string step, LimbEffectorReceiver ler)
         {
             if (!On) return;
@@ -103,13 +79,17 @@ namespace FruitLab
                     }
                 }
 
-                // By identity, not by name. A severed limb gets a creature of its own
-                // built from the same prefab, so two completely different bodies both
-                // read as "HumanCreaturePrefab(Clone)" — which hid a call being made
-                // against the wrong hierarchy entirely.
+                int layer = -1;
+                try
+                {
+                    var col = ler.GetComponentInChildren<Collider>(true);
+                    if (col != null) layer = col.gameObject.layer;
+                }
+                catch { }
+
                 Log("wiring",
                     $"{step}: {Name(ler)} — body {Body(creature)}, " +
-                    $"hangs off {parent}, native {native}, " +
+                    $"hangs off {parent}, native {native}, layer {layer}, " +
                     $"puppeteer {(puppet != null ? "yes" : "NO — it will hang limp")}");
             }
             catch (System.Exception e)
@@ -118,7 +98,6 @@ namespace FruitLab
             }
         }
 
-        /// A creature, named *and* numbered. Names alone are ambiguous here.
         public static string Body(bam creature)
         {
             if (creature == null) return "none";
@@ -126,12 +105,6 @@ namespace FruitLab
             catch { return "<gone>"; }
         }
 
-        /// One wiring line per limb, for a whole body at once.
-        ///
-        /// The control that should have been run first. "Puppeteer NO" on a sutured limb
-        /// only means something if an *intact* limb on the same body says yes — and if
-        /// none of them do, the puppeteer was never what holds a limb up here and the
-        /// whole line of attack was aimed at the wrong system.
         public static void Survey(string label, List<LimbEffectorReceiver> limbs)
         {
             if (!On || limbs == null) return;
@@ -145,16 +118,72 @@ namespace FruitLab
             try { return limb.transform.name; } catch { return "<gone>"; }
         }
 
+        // ── Collision between two limbs ───────────────────────────────────────
+
+        public static void Collision(string step, LimbEffectorReceiver a, LimbEffectorReceiver b)
+        {
+            if (!On || a == null || b == null) return;
+
+            try
+            {
+                var mine   = a.GetComponentsInChildren<Collider>(true);
+                var theirs = b.GetComponentsInChildren<Collider>(true);
+
+                int pairs = 0, ignored = 0, disabled = 0;
+                int layerA = -1, layerB = -1;
+
+                foreach (var x in mine)
+                {
+                    if (x == null) continue;
+
+                    layerA = x.gameObject.layer;
+                    if (!x.enabled) disabled++;
+
+                    foreach (var y in theirs)
+                    {
+                        if (y == null || y == x) continue;
+
+                        layerB = y.gameObject.layer;
+                        pairs++;
+
+                        try { if (Physics.GetIgnoreCollision(x, y)) ignored++; } catch { }
+                    }
+                }
+
+                bool layersOff = false;
+                try
+                {
+                    if (layerA >= 0 && layerB >= 0)
+                        layersOff = Physics.GetIgnoreLayerCollision(layerA, layerB);
+                }
+                catch { }
+
+                string joint = "none";
+                var ja = Limbs.JointOf(a);
+                var jb = Limbs.JointOf(b);
+                var rbA = Limbs.BodyOf(a);
+                var rbB = Limbs.BodyOf(b);
+
+                if (ja != null && ja.connectedBody != null && ja.connectedBody == rbB)
+                    joint = $"{Name(a)} still jointed to {Name(b)} (collision {ja.enableCollision})";
+                else if (jb != null && jb.connectedBody != null && jb.connectedBody == rbA)
+                    joint = $"{Name(b)} still jointed to {Name(a)} (collision {jb.enableCollision})";
+
+                Log("collision",
+                    $"{step}: {Name(a)} vs {Name(b)} — {ignored}/{pairs} pair(s) excused, " +
+                    $"{disabled} collider(s) off, layers {layerA}/{layerB}" +
+                    (layersOff ? " EXCUSED" : "") + $", joint: {joint}");
+            }
+            catch (System.Exception e)
+            {
+                Log("collision", $"{step}: could not read: {e.Message}");
+            }
+        }
+
         // ── Body vitals ───────────────────────────────────────────────────────
 
         private static readonly List<Vitals.Handle> _params = new List<Vitals.Handle>();
 
-        /// A body's own top-level parameters on one line, with whether it has a head.
-        ///
-        /// Consciousness is the one that decides whether anything is home. A body given
-        /// a head back that stands up rigid and refuses to walk is either not reading
-        /// the new head at all, or was latched as dead when it lost the old one — and
-        /// those look identical from outside but not here.
         public static void Vitals(string step, LimbEffectorReceiver anyLimb)
         {
             if (!On || anyLimb == null) return;
@@ -168,12 +197,6 @@ namespace FruitLab
 
                 Log("vitals", $"{step}: {Body(creature)}, head {Limbs.HasHead(root)}");
 
-                // Outputs and inputs, separately, and marked when frozen.
-                //
-                // Internals are what the solver computes; externals are what it computes
-                // them *from*. A parameter stuck at a value is either being held there by
-                // us — the Lazarus freeze is a real possibility and would be our bug — or
-                // driven there by an input, and only these two lines apart can say which.
                 _params.Clear();
                 FruitLab.Vitals.CollectCreature(creature, _params);
                 Log("vitals", "  outputs: " + Describe(_params));
@@ -214,7 +237,6 @@ namespace FruitLab
         private static string _label = "watch";
         private static float  _until;
 
-        /// Starts counting destroyed voxels on a set of limbs.
         public static void WatchVoxels(string label, List<LimbEffectorReceiver> limbs,
                                        float seconds)
         {
@@ -233,8 +255,6 @@ namespace FruitLab
             Log(_label, $"watching {_tracked.Count} limb(s) for {seconds:0.0}s");
         }
 
-        /// Reads every watched limb right now and reports what changed since the last
-        /// read. Call it between steps — that is what makes the log a sequence.
         public static void Sample(string step, bool sayWhenNothing = true)
         {
             if (!On || _tracked.Count == 0) return;
@@ -282,8 +302,6 @@ namespace FruitLab
 
         // ── Whole-body helpers ────────────────────────────────────────────────
 
-        /// Reports severing while a watch is running — the tail end of most of the ways
-        /// a limb operation goes wrong, and worth seeing next to the voxel counts.
         public static void Register()
         {
             Dismemberment.Split += ler =>

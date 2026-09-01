@@ -9,43 +9,44 @@ namespace FruitLab
 {
     // ══════════════════════════════════════════════════════════════════════════════
     // Vitals Monitor — a self-contained FruitLab item.
-    //
-    // A read-only status panel that floats beside a body: what the LVA graph actually
-    // thinks of it, plus the clinical numbers you would expect on a monitor. Aim at a
-    // creature while the slot is held to read it; left click pins it so it keeps
-    // reading while you switch to something that does damage.
-    //
-    // Written as much for building the rest of FruitLab as for playing with. Every
-    // question the Lazarus Syringe raised — which parameter is consciousness, what
-    // the solver does to a value after a dose expires, whether a "revived" body is
-    // genuinely whole — is a thing you can now watch instead of infer from a log.
     // ══════════════════════════════════════════════════════════════════════════════
     internal static class VitalsMonitor
     {
-        public const string ItemId = "FruitLab:VitalsMonitor";
+        public const string ItemId      = "FruitLab:VitalsMonitor";
+        public const string DisplayName = "Vitals Monitor";
 
-        private static readonly Color IconColor = new Color(0.42f, 0.86f, 0.62f, 1f);
+        public static readonly Color IconColor = new Color(0.42f, 0.86f, 0.62f, 1f);
 
         private static readonly List<Reading> _pinned = new List<Reading>();
         private static Reading _aimed;
         private static bool    _equipped;
 
-        /// One body being read. Handles are collected once and reused; the values
-        /// behind them are live, so only the parameter set needs refreshing (a limb
-        /// coming off changes it).
         private sealed class Reading
         {
-            public Transform Anchor;        // a limb, so the panel tracks the body
+            public Transform Anchor;
             public Transform CreatureRoot;
+
             public string    Name;
+            public string    Record;
+            public bool      Rare;
+
+            public int       Rest  = 72;
+            public int       Shift;
 
             public List<Vitals.Handle> Creature = new List<Vitals.Handle>();
             public List<Vitals.Handle> Limbs    = new List<Vitals.Handle>();
             public List<Vitals.Handle> Inputs   = new List<Vitals.Handle>();
             public List<Vitals.Handle> Organs   = new List<Vitals.Handle>();
 
-            public float Age;               // seconds since the set was collected
+            public float Age;
             public bool  Pinned;
+
+            public float Mind = 1f;
+            public float Blood = 1f;
+            public int   Bpm;
+            public float Phase;
+
+            public int Frame = -1;
 
             public bool Alive => Anchor != null && CreatureRoot != null;
         }
@@ -54,23 +55,23 @@ namespace FruitLab
         // Toolbar item
         // ══════════════════════════════════════════════════════════════════════════
 
-        public static void Register()
+        public static void Equip() => _equipped = true;
+
+        public static void Unequip()
         {
-            FruitToolbar.Register(new FruitToolbarItem
-            {
-                Id           = ItemId,
-                Name         = "Vitals Monitor",
-                Icon         = FruitToolbar.MakeSolidIcon(IconColor),
-                OnSelected   = slot => _equipped = true,
-                OnDeselected = slot => { _equipped = false; _aimed = null; },
-            });
+            _equipped = false;
+            _aimed    = null;
         }
+
+        public static void Click() => TogglePin();
 
         public static void OnSceneReload()
         {
             _equipped = false;
             _aimed    = null;
             _pinned.Clear();
+
+            Patients.Reload();
         }
 
         // ══════════════════════════════════════════════════════════════════════════
@@ -85,7 +86,7 @@ namespace FruitLab
             {
                 var r = _pinned[i];
                 if (!r.Alive) { _pinned.RemoveAt(i); continue; }
-                Refresh(r, dt);
+                Tick(r, dt);
             }
 
             if (!_equipped) { _aimed = null; return; }
@@ -99,14 +100,10 @@ namespace FruitLab
             }
             else
             {
-                // Same body as last frame: keep its parameter set and just follow the
-                // limb being pointed at. Re-collecting per frame would walk every
-                // entity on the creature sixty times a second for no new information.
                 _aimed.Anchor = anchor;
-                Refresh(_aimed, dt);
+                Tick(_aimed, dt);
             }
 
-            if (Input.GetMouseButtonDown(0)) TogglePin();
         }
 
         private static void TogglePin()
@@ -126,8 +123,34 @@ namespace FruitLab
             MelonLogger.Msg($"[FruitLab] Vitals pinned on {_aimed.Name}.");
         }
 
-        /// Rebuilds a reading's parameter set on a slow cadence — losing a limb
-        /// changes what there is to read, and a stale handle points at a dead object.
+        private static void Tick(Reading r, float dt)
+        {
+            if (r.Frame == Time.frameCount) return;
+            r.Frame = Time.frameCount;
+
+            Pulse(r, dt);
+            Refresh(r, dt);
+        }
+
+        private static void Pulse(Reading r, float dt)
+        {
+            float mind = 1f, blood = 1f;
+
+            foreach (var h in r.Creature)
+            {
+                if (!h.Valid) continue;
+                if      (h.Key == KeyBlood) blood = h.Fraction;
+                else if (h.Key == KeyMind)  mind  = h.Fraction;
+            }
+
+            r.Mind  = mind;
+            r.Blood = blood;
+            r.Bpm = mind <= 0.001f ? 0
+                  : Mathf.RoundToInt(Mathf.Lerp(r.Rest + StressSpan, r.Rest, blood));
+
+            if (r.Bpm > 0) r.Phase = Mathf.Repeat(r.Phase + r.Bpm / 60f * dt, 1f);
+        }
+
         private static void Refresh(Reading r, float dt)
         {
             r.Age += dt;
@@ -165,8 +188,6 @@ namespace FruitLab
             Vitals.CollectOrgans(r.CreatureRoot, r.Organs);
         }
 
-        /// The creature root the player is looking at, or null. Cheap — one raycast
-        /// and two lookups, no parameter collection.
         private static Transform Probe(out Transform anchor)
         {
             anchor = null;
@@ -194,7 +215,11 @@ namespace FruitLab
             {
                 Anchor       = anchor,
                 CreatureRoot = root,
-                Name         = root.name.Replace("(Clone)", "").Replace("Prefab", ""),
+                Name         = Patients.NameFor(root),
+                Record       = Patients.RecordFor(root),
+                Rare         = Patients.IsRare(root),
+                Rest         = Patients.RestingBpm(root),
+                Shift        = Patients.PressureShift(root),
             };
             Collect(r);
             return r;
@@ -204,8 +229,15 @@ namespace FruitLab
         // Panel
         // ══════════════════════════════════════════════════════════════════════════
 
-        private const float PanelW = 246f;
-        private const float RowH   = 17f;
+        private const float PanelW   = 300f;
+        private const float RowH     = 20f;
+        private const float HeaderH  = 40f;
+        private const float BarH     = 24f;
+        private const float TraceH   = 40f;
+
+        private const float TraceWindow = 2.6f;
+
+        private const float StressSpan = 76f;
 
         public static void OnGUI()
         {
@@ -216,7 +248,6 @@ namespace FruitLab
 
             foreach (var r in _pinned) Draw(cam, r);
 
-            // Skip the aimed panel when that body is already pinned, or it draws twice.
             if (_aimed == null || _aimed.Pinned) return;
             bool dup = false;
             foreach (var p in _pinned) if (p.CreatureRoot == _aimed.CreatureRoot) { dup = true; break; }
@@ -229,49 +260,105 @@ namespace FruitLab
 
             Vector3 world  = r.Anchor.position + Vector3.up * 0.55f;
             Vector3 screen = cam.WorldToScreenPoint(world);
-            if (screen.z <= 0f) return;   // behind the camera
+            if (screen.z <= 0f) return;
 
-            int rows = r.Creature.Count + LimbKeys(r).Count
-                     + InputKeys(r).Count + OrganKeys(r).Count + 6;
-            float h  = 26f + rows * RowH + 10f;
-            float x  = screen.x + 26f;
-            float y  = Screen.height - screen.y - h * 0.5f;
+            float mind = r.Mind, bloodFrac = r.Blood;
+
+            bool dead = mind <= 0.001f;
+
+            string state = dead         ? "DECEASED"
+                         : mind < 0.25f ? "UNCONSCIOUS"
+                         : mind < 0.95f ? "IMPAIRED" : "ALIVE";
+            Color stateColor = dead || mind < 0.25f ? FruitLabHud.Bad
+                             : mind < 0.95f         ? FruitLabHud.Warn : FruitLabHud.Good;
+
+            float sustain  = LazarusSyringe.SustainOn(r.CreatureRoot);
+            bool  treating = HealingSyringe.TreatingOn(r.CreatureRoot);
+            bool  propped  = sustain > 0f;
+
+            bool raw = Config.VitalsRaw;
+
+            int rawRows = raw ? r.Creature.Count + LimbKeys(r).Count
+                              + InputKeys(r).Count + OrganKeys(r).Count + 2 : 0;
+
+            int notes = (propped ? 1 : 0) + (treating ? 1 : 0);
+
+            float h = HeaderH + BarH * 2f + TraceH + RowH * 2f + 16f + rawRows * RowH
+                    + (notes > 0 ? notes * RowH + 6f : 0f);
+            float x = screen.x + 26f;
+            float y = Screen.height - screen.y - h * 0.5f;
 
             x = Mathf.Clamp(x, 4f, Screen.width  - PanelW - 4f);
             y = Mathf.Clamp(y, 4f, Screen.height - h      - 4f);
 
             var panel = new Rect(x, y, PanelW, h);
-            Fill(panel, new Color(0.05f, 0.06f, 0.07f, 0.82f));
+            Fill(panel, new Color(0.05f, 0.06f, 0.07f, 0.88f));
             Fill(new Rect(panel.x, panel.y, panel.width, 2f), IconColor);
 
-            float bloodFrac = 1f, mind = 1f;
-            foreach (var hnd in r.Creature)
+            float cy = panel.y + 5f;
+            Label(new Rect(panel.x + 8f, cy, PanelW - 92f, RowH), r.Name,
+                  r.Rare ? FruitLabHud.Rare : FruitLabHud.Normal, 13);
+            Label(new Rect(panel.x + PanelW - 84f, cy, 76f, RowH), state, stateColor, 12);
+
+            Label(new Rect(panel.x + 8f, cy + 16f, PanelW - 16f, RowH),
+                  $"REC {r.Record}", FruitLabHud.Dim, 10);
+
+            cy = panel.y + HeaderH;
+
+            // ── The two that matter ───────────────────────────────────────────
+            Gauge(panel.x, cy, "CONSCIOUSNESS", mind, dead, propped);
+            cy += BarH;
+            Gauge(panel.x, cy, "BLOOD", bloodFrac, dead, propped);
+            cy += BarH + 2f;
+
+            // ── Treatment ─────────────────────────────────────────────────────
+            if (propped)
             {
-                if (!hnd.Valid) continue;
-                if      (hnd.Key == KeyBlood) bloodFrac = hnd.Fraction;
-                else if (hnd.Key == KeyMind)  mind      = hnd.Fraction;
+                float span = Mathf.Max(Config.LazarusDuration, 0.01f);
+
+                Label(new Rect(panel.x + 8f, cy, 150f, RowH), "LIFE SUPPORT",
+                      FruitLabHud.Held, 11);
+                Label(new Rect(panel.x + PanelW - 60f, cy, 52f, RowH),
+                      Mathf.CeilToInt(sustain) + "s", FruitLabHud.Held, 11);
+
+                var run = new Rect(panel.x + 8f, cy + RowH - 4f, PanelW - 16f, 3f);
+                Fill(run, new Color(1f, 1f, 1f, 0.08f));
+                Fill(new Rect(run.x, run.y, run.width * Mathf.Clamp01(sustain / span), run.height),
+                     FruitLabHud.Held);
+
+                cy += RowH;
             }
 
-            // Death is consciousness bottoming out and nothing else — CrunchedDeathCounter
-            // watches that one parameter.
-            //
-            // Balance used to count towards this and does not any more. A perfectly
-            // healthy body lifted off the ground reads zero balance, and calling that
-            // IMPAIRED was the panel reporting posture as injury.
-            bool dead = mind <= 0.001f;
+            if (treating)
+            {
+                Label(new Rect(panel.x + 8f, cy, PanelW - 16f, RowH),
+                      "TREATING — healing syringe", FruitLabHud.Good, 11);
+                cy += RowH;
+            }
 
-            string state = dead              ? "DECEASED"
-                         : mind < 0.25f      ? "UNCONSCIOUS"
-                         : mind < 0.95f      ? "IMPAIRED" : "ALIVE";
-            Color stateColor = dead || mind < 0.25f ? FruitLabHud.Bad
-                             : mind < 0.95f         ? FruitLabHud.Warn : FruitLabHud.Good;
+            if (notes > 0) cy += 6f;
 
-            float cy = panel.y + 6f;
-            Label(new Rect(panel.x + 8f, cy, PanelW - 16f, RowH), r.Name, FruitLabHud.Normal, 12);
-            Label(new Rect(panel.x + PanelW - 84f, cy, 76f, RowH), state, stateColor, 12);
-            cy += RowH + 6f;
+            // ── Trace ─────────────────────────────────────────────────────────
+            int bpm = r.Bpm;
+            int sys = dead ? 0 : Mathf.RoundToInt(Mathf.Lerp(58f, 122f + r.Shift,          bloodFrac));
+            int dia = dead ? 0 : Mathf.RoundToInt(Mathf.Lerp(34f,  78f + r.Shift * 0.6f,   bloodFrac));
 
-            // ── Vitals: what the body has lost and can be given back ──────────
+            Trace(new Rect(panel.x + 8f, cy, PanelW - 16f, TraceH), bpm, r.Phase, bloodFrac, dead);
+            cy += TraceH + 4f;
+
+            Label(new Rect(panel.x + 8f, cy, PanelW - 16f, RowH),
+                  dead ? "0 bpm    0/0 mmHg" : $"~{bpm} bpm    ~{sys}/{dia} mmHg",
+                  dead ? FruitLabHud.Bad : FruitLabHud.Normal, 12);
+            cy += RowH;
+
+            Label(new Rect(panel.x + 8f, cy, PanelW - 16f, RowH),
+                  r.Pinned ? "pinned — click again to release" : "estimated from blood volume",
+                  FruitLabHud.Dim, 10);
+            cy += RowH + 2f;
+
+            if (!raw) return;
+
+            // ── Everything else, for when a number is what you want ───────────
             foreach (var hnd in r.Creature)
             {
                 if (!hnd.Valid || Vitals.IsPosture(hnd.Key)) continue;
@@ -294,12 +381,6 @@ namespace FruitLab
                 cy += RowH;
             }
 
-            // ── Posture: how it is carrying itself right now ───────────────────
-            //
-            // Kept apart and drawn flat, because these are not a health readout and
-            // colouring them like one is actively misleading: a pristine ragdoll held in
-            // the air reads muscle 5%, balance 0%, zr 5%. Low here means "limp", not
-            // "hurt", and it changes second to second.
             cy += 2f;
             Label(new Rect(panel.x + 8f, cy, PanelW - 16f, RowH),
                   "posture — not a health readout", FruitLabHud.Dim, 10);
@@ -326,22 +407,75 @@ namespace FruitLab
                 Row(panel.x, cy, Friendly(key), where, worst, held, true);
                 cy += RowH;
             }
-            cy += 4f;
+        }
 
-            // Clinical numbers, derived from blood rather than read from the game —
-            // the game models no such thing, so they are flavour with an honest label.
-            int bpm = dead ? 0 : Mathf.RoundToInt(Mathf.Lerp(148f, 72f, bloodFrac)
-                                                  + Mathf.Sin(Time.time * 3f) * 2f);
-            int sys = dead ? 0 : Mathf.RoundToInt(Mathf.Lerp(58f, 122f, bloodFrac));
-            int dia = dead ? 0 : Mathf.RoundToInt(Mathf.Lerp(34f, 78f, bloodFrac));
+        private static void Gauge(float px, float y, string name, float frac, bool dead,
+                                 bool held = false)
+        {
+            frac = Mathf.Clamp01(frac);
 
-            Label(new Rect(panel.x + 8f, cy, PanelW - 16f, RowH),
-                  $"~{bpm} bpm   ~{sys}/{dia} mmHg",
-                  dead ? FruitLabHud.Bad : FruitLabHud.Normal, 11);
-            cy += RowH;
-            Label(new Rect(panel.x + 8f, cy, PanelW - 16f, RowH),
-                  r.Pinned ? "pinned — click again to release" : "estimated from blood volume",
-                  FruitLabHud.Dim, 10);
+            Label(new Rect(px + 8f, y, 140f, RowH), name, FruitLabHud.Dim, 10);
+            Label(new Rect(px + PanelW - 52f, y, 44f, RowH),
+                  Mathf.RoundToInt(frac * 100f) + "%",
+                  dead ? FruitLabHud.Bad : FruitLabHud.Normal, 12);
+
+            var bar = new Rect(px + 8f, y + RowH - 3f, PanelW - 16f, 7f);
+            Fill(bar, new Color(1f, 1f, 1f, 0.08f));
+            Fill(new Rect(bar.x, bar.y, bar.width * frac, bar.height),
+                 held             ? FruitLabHud.Held
+                 : dead           ? FruitLabHud.Bad
+                 : frac < 0.25f   ? FruitLabHud.Bad
+                 : frac < 0.6f    ? FruitLabHud.Warn : FruitLabHud.Good);
+        }
+
+        private static void Trace(Rect box, int bpm, float phase, float blood, bool dead)
+        {
+            Fill(box, new Color(1f, 1f, 1f, 0.05f));
+
+            if (Event.current != null && Event.current.type != EventType.Repaint) return;
+
+            float mid  = box.y + box.height * 0.5f;
+            var   line = dead ? FruitLabHud.Bad : FruitLabHud.Good;
+
+            if (dead)
+            {
+                Fill(new Rect(box.x, mid, box.width, 1f), line);
+                return;
+            }
+
+            float cycles = Mathf.Max(TraceWindow * bpm / 60f, 1f);
+            float amp = box.height * 0.42f * Mathf.Clamp01(0.35f + blood * 0.65f);
+
+            const float step = 2f;
+            float prev = mid;
+
+            for (float dx = 0f; dx < box.width; dx += step)
+            {
+                float at   = Mathf.Repeat(phase + (box.width - dx) / box.width * cycles, 1f);
+                float here = mid - Beat(at) * amp;
+
+                float top = Mathf.Min(prev, here);
+                Fill(new Rect(box.x + dx, top, step, Mathf.Max(Mathf.Abs(here - prev), 1f)), line);
+
+                prev = here;
+            }
+        }
+
+        private static float Beat(float p)
+        {
+            float v = 0f;
+            v += 0.16f * Bump(p, 0.16f, 0.030f);
+            v -= 0.18f * Bump(p, 0.28f, 0.008f);
+            v += 1.00f * Bump(p, 0.31f, 0.008f);
+            v -= 0.30f * Bump(p, 0.34f, 0.010f);
+            v += 0.26f * Bump(p, 0.52f, 0.045f);
+            return v;
+        }
+
+        private static float Bump(float p, float at, float width)
+        {
+            float d = (p - at) / width;
+            return Mathf.Exp(-d * d);
         }
 
         private static void Row(float px, float y, string name, string key, float frac,
@@ -356,20 +490,13 @@ namespace FruitLab
             Fill(bar, new Color(1f, 1f, 1f, 0.10f));
             Fill(new Rect(bar.x, bar.y, bar.width * Mathf.Clamp01(frac), bar.height),
                  frozen  ? FruitLabHud.Held
-                 : posture ? FruitLabHud.Posture          // flat: low means limp, not hurt
+                 : posture ? FruitLabHud.Posture
                  : frac <= 0.001f ? FruitLabHud.Bad
                  : frac < 0.5f    ? FruitLabHud.Warn : FruitLabHud.Good);
 
-            // The raw parameter key stays on screen on purpose: the friendly names are
-            // inferred, and this is the column that lets you check them.
             Label(new Rect(px + 214f, y, 30f, RowH), frozen ? "HELD" : key, FruitLabHud.Dim, 9);
         }
 
-        // All four confirmed by watching one chest wound play out, 2026-08-29:
-        //   bbl blood         BloodTank points at it; keeps draining after death
-        //   bbj consciousness the kill registers the instant it reaches 0
-        //   bbh balance       tracks the worst limb value; at 0 the body cannot stand
-        //   bbk muscle        snaps 100 to 5 and back in time with each attempt to rise
         private const string KeyBlood   = "bbl";
         private const string KeyMind    = "bbj";
         private const string KeyBalance = "bbh";
@@ -387,7 +514,6 @@ namespace FruitLab
             }
         }
 
-        /// Distinct limb parameter types on this body, in a stable order.
         private static List<string> LimbKeys(Reading r)
         {
             _limbKeys.Clear();
@@ -421,13 +547,6 @@ namespace FruitLab
 
         private static readonly List<string> _organKeys = new List<string>();
 
-        /// Worst value for one parameter type, and who owns it.
-        ///
-        /// Reports "all" when every owner is on the same value rather than naming one of
-        /// them. Several of these parameters are creature-wide — every limb carries an
-        /// identical figure — and naming whichever happened to be enumerated first read
-        /// as a finding about that limb. Shooting a head and being told the pelvis was
-        /// worst was the display lying, not the game being strange.
         private static float Worst(List<Vitals.Handle> set, string key,
                                    out string where, out bool held)
         {
@@ -475,40 +594,5 @@ namespace FruitLab
             style.normal.textColor = c;
             GUI.Label(r, text, style);
         }
-    }
-
-    /// <summary>
-    /// Minimal IMGUI helpers for FruitLab's own panels.
-    ///
-    /// Deliberately never touches <c>font</c>, <c>fontStyle</c> or <c>alignment</c>:
-    /// those live in UnityEngine.TextRenderingModule, whose JIT type resolution fails
-    /// on a half-generated Il2CppAssemblies dump in a way a local try/catch cannot
-    /// catch. FruitLib quarantines them behind one no-inline method for that reason;
-    /// FruitLab sidesteps the module entirely and lays out with explicit rects.
-    /// </summary>
-    internal static class FruitLabHud
-    {
-        public static readonly Color Normal = new Color(0.92f, 0.94f, 0.95f, 1f);
-        public static readonly Color Dim    = new Color(0.55f, 0.58f, 0.60f, 1f);
-        public static readonly Color Good   = new Color(0.45f, 0.85f, 0.45f, 1f);
-        public static readonly Color Warn   = new Color(0.95f, 0.75f, 0.30f, 1f);
-        public static readonly Color Bad    = new Color(0.90f, 0.40f, 0.40f, 1f);
-        public static readonly Color Held   = new Color(0.45f, 0.72f, 1f,    1f);
-        /// Posture bars are drawn flat — a low one means limp, not injured.
-        public static readonly Color Posture = new Color(0.58f, 0.60f, 0.64f, 1f);
-
-        private static readonly Dictionary<int, GUIStyle> _bySize = new Dictionary<int, GUIStyle>();
-
-        public static GUIStyle Text(int size)
-        {
-            if (_bySize.TryGetValue(size, out var s) && s != null) return s;
-
-            s = new GUIStyle(GUI.skin.label) { fontSize = size };
-            _bySize[size] = s;
-            return s;
-        }
-
-        /// GUI.skin is per-scene, so cached styles built against the old one go stale.
-        public static void Reset() => _bySize.Clear();
     }
 }
