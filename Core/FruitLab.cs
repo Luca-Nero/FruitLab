@@ -91,6 +91,11 @@ namespace FruitLab
             _active = FruitGate.Check("FruitLab", LibMajor, LibMinor, LibPatch);
             if (!_active) return;
 
+            Init();
+        }
+
+        private void Init()
+        {
             HarmonyInstance.PatchAll();
             ConfigLoader.Load();
 
@@ -99,6 +104,12 @@ namespace FruitLab
             FruitUpdateCheck.Register("FruitLab", Version, "Luca-Nero", "FruitLab");
 
             LoggerInstance.Msg($"FruitLab v{Version} loaded.");
+        }
+
+        public override void OnLateInitializeMelon()
+        {
+            if (_active) return;
+            try { Unregister(FruitGate.FailureReason, silent: true); } catch { }
         }
 
         public override void OnUpdate()
